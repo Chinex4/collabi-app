@@ -1,14 +1,18 @@
-import { ScreenContent } from 'components/ScreenContent';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { StatusBar } from 'expo-status-bar';
 
 import './global.css';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+
+import { AppProviders } from '@/AppProviders';
+import { RootNavigator } from '@/navigation/RootNavigator';
 
 export default function App() {
   return (
-    <SafeAreaProvider>
-      <ScreenContent title="Home" path="App.tsx"></ScreenContent>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <AppProviders>
+        <RootNavigator />
+      </AppProviders>
       <StatusBar style="auto" />
-    </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
