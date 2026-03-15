@@ -1,169 +1,212 @@
+import { cache } from '@/data/cache';
 import { db } from '@/data/mockDb';
 import { ProjectStatus } from '@/types';
-import { generateId } from '@/utils/helpers';
 
-import { addNotification, logAudit, requireProject, requireUser, simulate } from './base';
-
-const recalcAnalytics = () => {
-  db.analytics.totalUsers = db.users.filter((user) => user.role === 'student').length;
-  db.analytics.activeUsers = db.users.filter(
-    (user) => user.role === 'student' && user.status === 'active'
-  ).length;
-  db.analytics.totalProjects = db.projects.length;
-  db.analytics.openProjects = db.projects.filter((project) => project.status === 'open').length;
-  db.analytics.completedProjects = db.projects.filter(
-    (project) => project.status === 'completed'
-  ).length;
-  db.analytics.taskActivity = db.tasks.length;
-  db.analytics.reportsOverview = db.reports.length;
-};
+import { apiRequest } from '../http';
+import {
+  mapAnalytics,
+  mapAnnouncement,
+  mapAuditLog,
+  mapProfile,
+  mapProject,
+  mapReport,
+  mapSetting,
+  mapUser,
+} from '../mappers';
 
 export const adminService = {
   async getDashboard() {
-    return simulate(() => ({
-      analytics: db.analytics,
-      recentReports: db.reports.slice(0, 5),
-      announcements: db.announcements.slice(0, 3),
-    }));
+    const [dashboard, reports] = await Promise.all([
+      apiRequest<any>('/admin/dashboard', { auth: true }),
+      apiRequest<any[]>('/admin/reports', { auth: true, query: { page: 1, limit: 5 } }),
+    ]);
+
+    const analytics = mapAnalytics(dashboard.data);
+    const recentReports = reports.data.map(mapReport);
+    cache.replaceAnalytics(analytics);
+    cache.replaceReports(recentReports);
+
+    return {
+      analytics,
+      recentReports,
+      announcements: db.announcements,
+    };
   },
   async getAnalytics() {
-    return simulate(() => db.analytics);
+    const response = await apiRequest<any>('/admin/analytics', {
+      auth: true,
+    });
+    const analytics = mapAnalytics(response.data);
+    cache.replaceAnalytics(analytics);
+    return analytics;
   },
   async getUsers(search = '') {
-    return simulate(() =>
-      db.users.filter(
-        (user) =>
-          user.role === 'student' &&
-          (!search ||
-            user.fullName.toLowerCase().includes(search.toLowerCase()) ||
-            user.email.toLowerCase().includes(search.toLowerCase()))
-      )
-    );
+    const response = await apiRequest<any[]>('/admin/users', {
+      auth: true,
+      query: { search },
+    });
+    const items = response.data.map(mapUser);
+    cache.syncUsers(items);
+    return items;
   },
   async getUserDetail(userId: string) {
-    return simulate(() => ({
-      user: requireUser(userId),
-      profile: db.profiles.find((profile) => profile.userId === userId),
+    const [userResponse, activityResponse] = await Promise.all([
+      apiRequest<any>(`/admin/users/${userId}`, { auth: true }),
+      apiRequest<any>(`/admin/users/${userId}/activity`, { auth: true }),
+    ]);
+
+    const user = mapUser(userResponse.data);
+    cache.syncUsers([user]);
+    const profile = activityResponse.data.profile ? mapProfile(activityResponse.data.profile) : undefined;
+    if (profile) {
+      cache.syncProfiles([profile]);
+    }
+
+    return {
+      user,
+      profile: profile ?? db.profiles.find((item) => item.userId === userId),
       projects: db.projects.filter(
         (project) => project.ownerId === userId || project.teamMemberIds.includes(userId)
       ),
-    }));
+      activity: activityResponse.data,
+    };
   },
-  async setUserSuspension(userId: string, suspended: boolean, actorId: string) {
-    return simulate(() => {
-      const user = requireUser(userId);
-      user.status = suspended ? 'suspended' : 'active';
-      recalcAnalytics();
-      logAudit(
-        actorId,
-        suspended ? 'suspend_user' : 'unsuspend_user',
-        'user',
-        userId,
-        `${user.fullName} status changed`
-      );
-      return user;
-    });
+  async setUserSuspension(userId: string, suspended: boolean, _actorId: string) {
+    const response = await apiRequest<any>(
+      `/admin/users/${userId}/${suspended ? 'suspend' : 'unsuspend'}`,
+      {
+        method: 'PATCH',
+        auth: true,
+      }
+    );
+
+    const user = mapUser(response.data);
+    cache.syncUsers([user]);
+    return user;
   },
-  async verifyUser(userId: string, actorId: string) {
-    return simulate(() => {
-      const user = requireUser(userId);
-      user.isVerified = true;
-      logAudit(actorId, 'verify_user', 'user', userId, `Verified ${user.fullName}`);
-      return user;
+  async verifyUser(userId: string, _actorId: string) {
+    const response = await apiRequest<any>(`/admin/users/${userId}/verify`, {
+      method: 'PATCH',
+      auth: true,
     });
+
+    const user = mapUser(response.data);
+    cache.syncUsers([user]);
+    return user;
   },
-  async deleteUser(userId: string, actorId: string) {
-    return simulate(() => {
-      const user = requireUser(userId);
-      user.status = 'deleted';
-      recalcAnalytics();
-      logAudit(actorId, 'delete_user', 'user', userId, `Soft deleted ${user.fullName}`);
-      return user;
+  async deleteUser(userId: string, _actorId: string) {
+    const response = await apiRequest<any>(`/admin/users/${userId}`, {
+      method: 'DELETE',
+      auth: true,
     });
+
+    const user = mapUser(response.data);
+    cache.syncUsers([user]);
+    return user;
   },
   async getProjects(search = '') {
-    return simulate(() =>
-      db.projects.filter(
-        (project) =>
-          !search ||
-          project.title.toLowerCase().includes(search.toLowerCase()) ||
-          project.description.toLowerCase().includes(search.toLowerCase())
-      )
-    );
+    const response = await apiRequest<any[]>('/admin/projects', {
+      auth: true,
+      query: { search },
+    });
+    const items = response.data.map((item) => mapProject(item));
+    cache.syncProjects(items);
+    return items;
   },
   async getProjectDetail(projectId: string) {
-    return simulate(() => ({
-      project: requireProject(projectId),
-      applications: db.applications.filter((application) => application.projectId === projectId),
-      reports: db.reports.filter((report) => report.targetId === projectId),
-    }));
+    const [projectResponse, reportsResponse] = await Promise.all([
+      apiRequest<any>(`/admin/projects/${projectId}`, { auth: true }),
+      apiRequest<any[]>(`/admin/reports`, {
+        auth: true,
+        query: { targetType: 'project' },
+      }),
+    ]);
+
+    const project = mapProject(projectResponse.data);
+    cache.syncProjects([project]);
+
+    return {
+      project,
+      applications: db.applications.filter((item) => item.projectId === projectId),
+      reports: reportsResponse.data.map(mapReport).filter((item) => item.targetId === projectId),
+    };
   },
-  async removeProject(projectId: string, actorId: string) {
-    return simulate(() => {
-      const index = db.projects.findIndex((item) => item.id === projectId);
-      if (index === -1) {
-        throw new Error('Project not found');
-      }
-      const project = db.projects[index];
-      db.projects.splice(index, 1);
-      recalcAnalytics();
-      logAudit(actorId, 'remove_project', 'project', projectId, `Removed ${project.title}`);
-      return { success: true };
+  async removeProject(projectId: string, _actorId: string) {
+    await apiRequest(`/admin/projects/${projectId}`, {
+      method: 'DELETE',
+      auth: true,
     });
+
+    cache.replaceProjects(db.projects.filter((item) => item.id !== projectId));
+    return { success: true };
   },
-  async changeProjectStatus(projectId: string, status: ProjectStatus, actorId: string) {
-    return simulate(() => {
-      const project = requireProject(projectId);
-      project.status = status;
-      recalcAnalytics();
-      logAudit(actorId, 'change_project_status', 'project', projectId, `Marked as ${status}`);
-      return project;
+  async changeProjectStatus(projectId: string, status: ProjectStatus, _actorId: string) {
+    const response = await apiRequest<any>(`/admin/projects/${projectId}/status`, {
+      method: 'PATCH',
+      auth: true,
+      json: { status },
     });
+
+    const project = mapProject(response.data);
+    cache.syncProjects([project]);
+    return project;
   },
   async getReports() {
-    return simulate(() => db.reports);
+    const response = await apiRequest<any[]>('/admin/reports', {
+      auth: true,
+    });
+    const items = response.data.map(mapReport);
+    cache.replaceReports(items);
+    return items;
   },
   async getReportDetail(reportId: string) {
-    return simulate(() => {
-      const report = db.reports.find((item) => item.id === reportId);
-      if (!report) {
-        throw new Error('Report not found');
-      }
-      return report;
+    const response = await apiRequest<any>(`/admin/reports/${reportId}`, {
+      auth: true,
     });
+    const report = mapReport(response.data);
+    cache.syncReports([report]);
+    return report;
   },
   async updateReportStatus(
     reportId: string,
     status: 'resolved' | 'dismissed' | 'reviewed',
-    actorId: string
+    _actorId: string
   ) {
-    return simulate(() => {
-      const report = db.reports.find((item) => item.id === reportId);
-      if (!report) {
-        throw new Error('Report not found');
-      }
-      report.status = status;
-      logAudit(actorId, 'update_report_status', 'report', reportId, `Marked report as ${status}`);
-      addNotification({
-        userId: report.reporterId,
-        type: 'report',
-        title: 'Report updated',
-        body: `Your report is now marked ${status}.`,
-        entityType: 'report',
-        entityId: report.id,
-        isRead: false,
-      });
-      return report;
-    }, 600);
+    const actionPath =
+      status === 'resolved'
+        ? `/admin/reports/${reportId}/resolve`
+        : status === 'dismissed'
+          ? `/admin/reports/${reportId}/dismiss`
+          : `/admin/reports/${reportId}/action`;
+
+    const response = await apiRequest<any>(actionPath, {
+      method: 'PATCH',
+      auth: true,
+      json: status === 'reviewed' ? { action: 'remove_message', resolutionNote: 'Reviewed' } : {},
+    });
+
+    const report = mapReport(response.data);
+    cache.syncReports([report]);
+    return report;
   },
   async getAuditLogs() {
-    return simulate(() => db.auditLogs);
+    const response = await apiRequest<any[]>('/admin/audit-logs', {
+      auth: true,
+    });
+    const items = response.data.map(mapAuditLog);
+    cache.replaceAuditLogs(items);
+    return items;
   },
   async getSettings() {
-    return simulate(() => db.settings);
+    const response = await apiRequest<any[]>('/admin/settings', {
+      auth: true,
+    });
+    const items = response.data.map(mapSetting);
+    cache.replaceSettings(items);
+    return items;
   },
   async upsertSetting(
-    actorId: string,
+    _actorId: string,
     payload: {
       id?: string;
       key?: string;
@@ -173,84 +216,58 @@ export const adminService = {
       category: string;
     }
   ) {
-    return simulate(() => {
-      if (payload.id) {
-        const existing = db.settings.find((setting) => setting.id === payload.id);
-        if (!existing) {
-          throw new Error('Setting not found');
-        }
-        Object.assign(existing, payload);
-        logAudit(actorId, 'update_setting', 'setting', existing.id, `Updated ${existing.label}`);
-        return existing;
-      }
-
-      const setting = {
-        id: generateId('setting'),
+    const response = await apiRequest<any>('/admin/settings', {
+      method: 'POST',
+      auth: true,
+      json: {
         key: payload.key ?? payload.label.toLowerCase().replace(/\s+/g, '_'),
-        label: payload.label,
         value: payload.value,
         description: payload.description,
-        category: payload.category,
-      };
-      db.settings.unshift(setting);
-      logAudit(actorId, 'create_setting', 'setting', setting.id, `Created ${setting.label}`);
-      return setting;
+        isPublic: true,
+      },
     });
+
+    const setting = mapSetting(response.data);
+    cache.replaceSettings(
+      payload.id
+        ? db.settings.map((item) => (item.id === payload.id ? setting : item))
+        : [setting, ...db.settings]
+    );
+    return setting;
   },
-  async deleteSetting(settingId: string, actorId: string) {
-    return simulate(() => {
-      const index = db.settings.findIndex((setting) => setting.id === settingId);
-      if (index === -1) {
-        throw new Error('Setting not found');
-      }
-      const setting = db.settings[index];
-      db.settings.splice(index, 1);
-      logAudit(actorId, 'delete_setting', 'setting', settingId, `Deleted ${setting.label}`);
-      return { success: true };
+  async deleteSetting(settingId: string, _actorId: string) {
+    await apiRequest(`/admin/settings/${settingId}`, {
+      method: 'DELETE',
+      auth: true,
     });
+
+    cache.replaceSettings(db.settings.filter((item) => item.id !== settingId));
+    return { success: true };
   },
   async getAnnouncements() {
-    return simulate(() => db.announcements);
+    return db.announcements;
   },
   async sendAnnouncement(
-    actorId: string,
+    _actorId: string,
     payload: { title: string; body: string; audience: 'all' | 'students' | 'admins' }
   ) {
-    return simulate(() => {
-      const announcement = {
-        id: generateId('announcement'),
+    const response = await apiRequest<any>('/admin/announcements', {
+      method: 'POST',
+      auth: true,
+      json: {
         title: payload.title,
-        body: payload.body,
-        audience: payload.audience,
-        createdAt: new Date().toISOString(),
-        createdBy: actorId,
-        isSent: true,
-      };
-      db.announcements.unshift(announcement);
-      db.users
-        .filter((user) => {
-          if (payload.audience === 'all') return true;
-          return payload.audience === 'students' ? user.role === 'student' : user.role === 'admin';
-        })
-        .forEach((user) =>
-          addNotification({
-            userId: user.id,
-            type: 'announcement',
-            title: announcement.title,
-            body: announcement.body,
-            entityType: 'announcement',
-            entityId: announcement.id,
-            isRead: false,
-          })
-        );
-      logAudit(
-        actorId,
-        'send_announcement',
-        'announcement',
-        announcement.id,
-        `Announcement sent to ${payload.audience}`
-      );
-      return announcement;
-    }, 800);
+        message: payload.body,
+      },
+    });
+
+    const announcement = mapAnnouncement({
+      id: `${Date.now()}`,
+      title: payload.title,
+      body: payload.body,
+      audience: payload.audience,
+      createdAt: new Date().toISOString(),
+    });
+    cache.replaceAnnouncements([announcement, ...db.announcements]);
+    return response.data ?? announcement;
   },
 };

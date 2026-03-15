@@ -1,110 +1,154 @@
+import { cache } from '@/data/cache';
 import { db } from '@/data/mockDb';
 import { Task } from '@/types';
-import { generateId } from '@/utils/helpers';
 
-import { addNotification, requireProject, simulate } from './base';
+import { apiRequest } from '../http';
+import { mapTask, mapTaskComment, mapUser } from '../mappers';
+
+const syncTaskUsers = (task: any) => {
+  task.assignedTo?.forEach((user: any) => {
+    if (user && typeof user === 'object') {
+      cache.syncUsers([mapUser(user)]);
+    }
+  });
+  if (task.createdBy && typeof task.createdBy === 'object') {
+    cache.syncUsers([mapUser(task.createdBy)]);
+  }
+};
 
 export const taskService = {
   async getProjectTasks(projectId: string) {
-    return simulate(() => db.tasks.filter((task) => task.projectId === projectId));
+    const response = await apiRequest<any[]>(`/tasks/project/${projectId}`, {
+      auth: true,
+    });
+
+    const items = response.data.map((item) => {
+      syncTaskUsers(item);
+      return mapTask(item);
+    });
+    cache.replaceTasks(items);
+    return items;
   },
-  async getMyTasks(userId: string) {
-    return simulate(() => db.tasks.filter((task) => task.assignedMemberIds.includes(userId)));
+  async getMyTasks(_userId: string) {
+    const response = await apiRequest<any[]>('/tasks/my-assigned', {
+      auth: true,
+    });
+
+    const items = response.data.map((item) => {
+      syncTaskUsers(item);
+      return mapTask(item);
+    });
+    cache.replaceTasks(items);
+    return items;
   },
   async getTask(taskId: string) {
-    return simulate(() => {
-      const task = db.tasks.find((item) => item.id === taskId);
-      if (!task) {
-        throw new Error('Task not found');
-      }
-      return task;
-    });
+    const task = db.tasks.find((item) => item.id === taskId);
+    if (!task) {
+      throw new Error('Task not found');
+    }
+    return task;
   },
   async createTask(
     projectId: string,
     payload: Omit<Task, 'id' | 'projectId' | 'attachments' | 'comments'>
   ) {
-    return simulate(() => {
-      requireProject(projectId);
-      const task: Task = {
-        id: generateId('task'),
-        projectId,
-        attachments: [],
-        comments: [],
-        ...payload,
-      };
-      db.tasks.unshift(task);
-      payload.assignedMemberIds.forEach((memberId) =>
-        addNotification({
-          userId: memberId,
-          type: 'task',
-          title: 'Task assigned',
-          body: `You were assigned "${payload.title}".`,
-          entityType: 'task',
-          entityId: task.id,
-          isRead: false,
-        })
-      );
-      return task;
-    }, 750);
+    const response = await apiRequest<any>('/tasks', {
+      method: 'POST',
+      auth: true,
+      json: {
+        title: payload.title,
+        project: projectId,
+        description: payload.description,
+        assignedTo: payload.assignedMemberIds,
+        priority: payload.priority,
+        status: payload.status,
+        dueDate: payload.dueDate,
+      },
+    });
+
+    syncTaskUsers(response.data);
+    const task = mapTask(response.data);
+    cache.syncTasks([task]);
+    return task;
   },
   async updateTask(taskId: string, payload: Partial<Task>) {
-    return simulate(() => {
-      const task = db.tasks.find((item) => item.id === taskId);
-      if (!task) {
-        throw new Error('Task not found');
-      }
-      Object.assign(task, payload);
-      return task;
-    }, 700);
+    const response = await apiRequest<any>(`/tasks/${taskId}`, {
+      method: 'PATCH',
+      auth: true,
+      json: {
+        title: payload.title,
+        description: payload.description,
+        assignedTo: payload.assignedMemberIds,
+        priority: payload.priority,
+        status: payload.status,
+        progress: payload.progress,
+        dueDate: payload.dueDate,
+        attachments: payload.attachments?.map((item) => item.id),
+      },
+    });
+
+    syncTaskUsers(response.data);
+    const task = mapTask(response.data);
+    cache.syncTasks([task]);
+    return task;
   },
   async deleteTask(taskId: string) {
-    return simulate(() => {
-      const index = db.tasks.findIndex((item) => item.id === taskId);
-      if (index === -1) {
-        throw new Error('Task not found');
-      }
-      db.tasks.splice(index, 1);
-      return { message: 'Task removed' };
+    const response = await apiRequest(`/tasks/${taskId}`, {
+      method: 'DELETE',
+      auth: true,
     });
+
+    cache.replaceTasks(db.tasks.filter((item) => item.id !== taskId));
+    return { message: response.message };
   },
-  async addComment(taskId: string, authorId: string, body: string) {
-    return simulate(() => {
-      const task = db.tasks.find((item) => item.id === taskId);
-      if (!task) {
-        throw new Error('Task not found');
-      }
-      const comment = {
-        id: generateId('task_comment'),
-        taskId,
-        authorId,
-        body,
-        createdAt: new Date().toISOString(),
-      };
-      task.comments.push(comment);
-      return comment;
-    }, 500);
+  async addComment(taskId: string, _authorId: string, body: string) {
+    const response = await apiRequest<any>(`/tasks/${taskId}/comments`, {
+      method: 'POST',
+      auth: true,
+      json: { content: body },
+    });
+
+    const comment = mapTaskComment(response.data);
+    const task = db.tasks.find((item) => item.id === taskId);
+    if (task) {
+      cache.syncTasks([{ ...task, comments: [...task.comments, comment] }]);
+    }
+    return comment;
   },
   async updateComment(taskId: string, commentId: string, body: string) {
-    return simulate(() => {
-      const task = db.tasks.find((item) => item.id === taskId);
-      const comment = task?.comments.find((item) => item.id === commentId);
-      if (!comment) {
-        throw new Error('Comment not found');
-      }
-      comment.body = body;
-      comment.updatedAt = new Date().toISOString();
-      return comment;
+    const response = await apiRequest<any>(`/tasks/comments/${commentId}`, {
+      method: 'PATCH',
+      auth: true,
+      json: { content: body },
     });
+
+    const comment = mapTaskComment(response.data);
+    const task = db.tasks.find((item) => item.id === taskId);
+    if (task) {
+      cache.syncTasks([
+        {
+          ...task,
+          comments: task.comments.map((item) => (item.id === commentId ? comment : item)),
+        },
+      ]);
+    }
+    return comment;
   },
   async deleteComment(taskId: string, commentId: string) {
-    return simulate(() => {
-      const task = db.tasks.find((item) => item.id === taskId);
-      if (!task) {
-        throw new Error('Task not found');
-      }
-      task.comments = task.comments.filter((comment) => comment.id !== commentId);
-      return { success: true };
+    await apiRequest(`/tasks/comments/${commentId}`, {
+      method: 'DELETE',
+      auth: true,
     });
+
+    const task = db.tasks.find((item) => item.id === taskId);
+    if (task) {
+      cache.syncTasks([
+        {
+          ...task,
+          comments: task.comments.filter((item) => item.id !== commentId),
+        },
+      ]);
+    }
+    return { success: true };
   },
 };

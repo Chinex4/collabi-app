@@ -264,7 +264,7 @@ export const RootNavigator = () => {
   const { session, isBootstrapping } = useSession();
 
   if (isBootstrapping) {
-    return <LoadingState label="Restoring your session..." />;
+    return <LoadingState label="Restoring your session..." fullscreen />;
   }
 
   return (

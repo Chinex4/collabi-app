@@ -8,7 +8,7 @@ import { OTP_LENGTH } from '@/constants';
 
 export const WelcomeScreen = ({ navigation }: any) => (
   <LinearGradient colors={['#2C0B4E', '#7921BF', '#C18AF1']} className="flex-1">
-    <AppScreen scroll={false}>
+    <AppScreen scroll={false} backgroundClassName="bg-transparent">
       <View className="flex-1 justify-between py-8">
         <View className="mt-8">
           <View className="h-16 w-16 items-center justify-center rounded-[22px] bg-white/15">

@@ -5,6 +5,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { View } from 'react-native';
 
 import { authService } from '@/api/services/authService';
+import { chatService } from '@/api/services/chatService';
 import { AppText } from '@/components/common';
 import { useAppDispatch, useAppSelector } from '@/hooks/useAppStore';
 import { store } from '@/store';
@@ -38,6 +39,7 @@ const Bootstrapper = ({ children }: { children: ReactNode }) => {
       try {
         const session = await sessionStorage.getSession();
         if (!session) {
+          chatService.disconnect();
           dispatch(clearAuth());
           dispatch(finishBootstrap());
           return;
@@ -47,9 +49,11 @@ const Bootstrapper = ({ children }: { children: ReactNode }) => {
         dispatch(setSession(refreshed.session));
         dispatch(setCurrentUser(refreshed.user));
         await sessionStorage.setSession(refreshed.session);
+        chatService.connect(refreshed.session.accessToken, queryClient);
       } catch {
         dispatch(clearAuth());
         await sessionStorage.setSession(null);
+        chatService.disconnect();
       } finally {
         dispatch(finishBootstrap());
       }
@@ -57,6 +61,12 @@ const Bootstrapper = ({ children }: { children: ReactNode }) => {
 
     void bootstrap();
   }, [dispatch]);
+
+  useEffect(() => {
+    return () => {
+      chatService.disconnect();
+    };
+  }, []);
 
   useEffect(() => {
     if (!toast) {

@@ -110,14 +110,13 @@ export const ProjectFormScreen = ({
 
   const uploadMutation = useMutation({
     mutationFn: () =>
-      uploadService.uploadMock(
-        currentUser!.id,
-        'project',
-        `${form.watch('title') || 'project'}-brief.pdf`
-      ),
+      uploadService.pickDocument(currentUser!.id, 'project'),
     onSuccess: (file) => {
+      if (!file) {
+        return;
+      }
       setAttachments((current) => [...current, file]);
-      dispatch(showToast({ type: 'success', message: 'Mock attachment uploaded' }));
+      dispatch(showToast({ type: 'success', message: 'Attachment uploaded' }));
     },
   });
 
@@ -190,7 +189,7 @@ export const ProjectFormScreen = ({
         />
         <FormTagInput control={form.control} name="tags" label="Tags" />
         <AppButton
-          label="Attach Mock File"
+          label="Attach File"
           onPress={() => uploadMutation.mutate()}
           variant="secondary"
           className="mb-4"

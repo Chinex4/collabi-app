@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Student Project Collaboration Platform",
+    "name": "Collabi",
     "slug": "collabi",
     "version": "1.0.0",
 
@@ -15,12 +15,12 @@
     "plugins": [],
 
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/logo.png",
 
     "userInterfaceStyle": "automatic",
 
     "splash": {
-      "image": "./assets/splash.png",
+      "image": "./assets/logo.png",
       "resizeMode": "contain",
       "backgroundColor": "#7921BF"
     },
@@ -30,7 +30,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
+        "foregroundImage": "./assets/logo.png",
         "backgroundColor": "#7921BF"
       }
     }

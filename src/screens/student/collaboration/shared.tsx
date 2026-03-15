@@ -4,7 +4,7 @@ import { View } from 'react-native';
 import { AppText } from '@/components/common';
 import { db } from '@/data/mockDb';
 
-export const ProjectContextCard = ({ projectId }: { projectId: string }) => {
+export const ProjectContextCard = ({ projectId }: { projectId?: string }) => {
   const project = db.projects.find((item) => item.id === projectId);
   if (!project) return null;
 

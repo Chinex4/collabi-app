@@ -70,7 +70,7 @@ export const AccountSettingsScreen = ({ navigation }: any) => {
       <ConfirmModal
         visible={showDeactivate}
         title="Deactivate account?"
-        message="This mock flow marks the account as suspended and signs you out."
+        message="This deactivates your account and signs you out."
         confirmLabel="Deactivate"
         onClose={() => setShowDeactivate(false)}
         onConfirm={async () => {

@@ -2,43 +2,58 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 
 import { FileResource } from '@/types';
-import { generateId } from '@/utils/helpers';
 
-import { simulate } from './base';
+import { apiRequest } from '../http';
+import { mapFileResource } from '../mappers';
 
-const createFile = (
-  name: string,
-  type: string,
-  context: FileResource['context'],
-  uploadedBy: string
-): FileResource => ({
-  id: generateId('file'),
-  name,
-  type,
-  context,
-  url: `https://files.collabi.mock/${encodeURIComponent(name)}`,
-  sizeKb: Math.floor(Math.random() * 900) + 80,
-  uploadedAt: new Date().toISOString(),
-  uploadedBy,
-});
+type Context = FileResource['context'];
+
+const uploadAsset = async (
+  asset: {
+    uri: string;
+    mimeType?: string | null;
+    name?: string | null;
+  },
+  context: Context
+) => {
+  const formData = new FormData();
+  formData.append('contextType', context);
+  formData.append('file', {
+    uri: asset.uri,
+    name: asset.name ?? 'upload',
+    type: asset.mimeType ?? 'application/octet-stream',
+  } as any);
+
+  const response = await apiRequest<any>('/files/upload', {
+    method: 'POST',
+    auth: true,
+    body: formData,
+  });
+
+  return mapFileResource(response.data);
+};
 
 export const uploadService = {
-  async pickDocument(uploadedBy: string, context: FileResource['context']) {
+  async pickDocument(_uploadedBy: string, context: Context) {
     const result = await DocumentPicker.getDocumentAsync({
       multiple: false,
-      copyToCacheDirectory: false,
+      copyToCacheDirectory: true,
     });
     if (result.canceled) {
       return null;
     }
+
     const asset = result.assets[0];
-    return simulate(
-      () =>
-        createFile(asset.name, asset.mimeType ?? 'application/octet-stream', context, uploadedBy),
-      900
+    return uploadAsset(
+      {
+        uri: asset.uri,
+        mimeType: asset.mimeType,
+        name: asset.name,
+      },
+      context
     );
   },
-  async pickImage(uploadedBy: string, context: FileResource['context']) {
+  async pickImage(_uploadedBy: string, context: Context) {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
       allowsEditing: true,
@@ -47,23 +62,18 @@ export const uploadService = {
     if (result.canceled) {
       return null;
     }
+
     const asset = result.assets[0];
-    return simulate(
-      () =>
-        createFile(
-          asset.fileName ?? 'image.jpg',
-          asset.mimeType ?? 'image/jpeg',
-          context,
-          uploadedBy
-        ),
-      900
+    return uploadAsset(
+      {
+        uri: asset.uri,
+        mimeType: asset.mimeType,
+        name: asset.fileName ?? 'image.jpg',
+      },
+      context
     );
   },
-  async uploadMock(
-    uploadedBy: string,
-    context: FileResource['context'],
-    fileName = 'mock-upload.txt'
-  ) {
-    return simulate(() => createFile(fileName, 'text/plain', context, uploadedBy), 900);
+  async uploadMock(uploadedBy: string, context: Context) {
+    return this.pickDocument(uploadedBy, context);
   },
 };

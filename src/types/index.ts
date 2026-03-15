@@ -3,7 +3,7 @@ export type Role = 'student' | 'admin';
 export type UserStatus = 'active' | 'suspended' | 'deleted';
 export type ProjectStatus = 'open' | 'in_progress' | 'completed' | 'cancelled' | 'closed';
 export type ProjectVisibility = 'public' | 'private' | 'department_only';
-export type Availability = 'part_time' | 'weekends' | 'full_time' | 'flexible';
+export type Availability = 'available' | 'busy' | 'unavailable';
 export type ApplicationStatus = 'pending' | 'accepted' | 'rejected' | 'withdrawn';
 export type InvitationStatus = 'pending' | 'accepted' | 'declined' | 'cancelled';
 export type MembershipStatus = 'active' | 'left' | 'removed';
@@ -66,11 +66,12 @@ export interface User {
   avatar?: string;
   isVerified: boolean;
   status: UserStatus;
-  password: string;
+  password?: string;
   createdAt: string;
 }
 
 export interface StudentProfile {
+  id?: string;
   userId: string;
   bio: string;
   skills: string[];
@@ -175,6 +176,7 @@ export interface Conversation {
   typingUserIds: string[];
   unreadBy: Record<string, number>;
   presence: Record<string, PresenceStatus>;
+  updatedAt?: string;
 }
 
 export interface Message {

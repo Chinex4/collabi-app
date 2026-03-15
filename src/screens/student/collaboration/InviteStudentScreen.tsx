@@ -1,12 +1,14 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import React, { useState } from 'react';
 import { View } from 'react-native';
 
 import { collaborationService } from '@/api/services/collaborationService';
+import { projectService } from '@/api/services/projectService';
 import { AppButton, AppHeader, AppScreen, SearchBar } from '@/components/common';
 import { FormSelect, FormTextArea, useAppForm } from '@/components/forms';
 import { QUERY_KEYS } from '@/constants';
 import { db } from '@/data/mockDb';
+import { useProfiles } from '@/hooks/useQueries';
 import { useSession } from '@/hooks/useSession';
 import { useAppDispatch } from '@/hooks/useAppStore';
 import { showToast } from '@/store/uiSlice';
@@ -19,22 +21,27 @@ export const InviteStudentScreen = ({ navigation, route }: any) => {
   const queryClient = useQueryClient();
   const { currentUser } = useSession();
   const [search, setSearch] = useState('');
-  const projectId =
-    route.params?.projectId ??
-    db.projects.find((project) => project.ownerId === currentUser?.id)?.id;
+  const myProjectsQuery = useQuery({
+    queryKey: ['my-projects', currentUser?.id],
+    queryFn: () => projectService.getMyProjects(currentUser!.id),
+    enabled: Boolean(currentUser?.id),
+  });
+  const projectId = route.params?.projectId ?? myProjectsQuery.data?.[0]?.id;
   const presetStudentId = route.params?.studentId as string | undefined;
 
   const project = db.projects.find((item) => item.id === projectId);
   const existingMemberIds = db.memberships
     .filter((membership) => membership.projectId === projectId && membership.status === 'active')
     .map((membership) => membership.studentId);
-  const candidates = db.users.filter(
-    (user) =>
-      user.role === 'student' &&
-      user.id !== currentUser?.id &&
-      !existingMemberIds.includes(user.id) &&
-      (!search || user.fullName.toLowerCase().includes(search.toLowerCase()))
-  );
+  const candidatesQuery = useProfiles({ search });
+  const candidates = (candidatesQuery.data ?? [])
+    .map(({ user }) => user)
+    .filter(
+      (user) =>
+        user.role === 'student' &&
+        user.id !== currentUser?.id &&
+        !existingMemberIds.includes(user.id)
+    );
 
   const form = useAppForm({
     defaultValues: {

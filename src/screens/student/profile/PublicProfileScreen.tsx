@@ -17,7 +17,8 @@ import { useSession } from '@/hooks/useSession';
 
 export const PublicProfileScreen = ({ navigation, route }: any) => {
   const userId = route.params.userId as string;
-  const profileQuery = useProfile(userId);
+  const profileId = (route.params.profileId as string | undefined) ?? userId;
+  const profileQuery = useProfile(profileId);
   const { currentUser } = useSession();
 
   const chatMutation = useMutation({
@@ -31,6 +32,9 @@ export const PublicProfileScreen = ({ navigation, route }: any) => {
   }
 
   const { user, profile } = profileQuery.data;
+  if (!user) {
+    return <LoadingState label="Loading profile..." />;
+  }
 
   return (
     <AppScreen>

@@ -50,11 +50,6 @@ export const ReportDetailScreen = ({ route }: any) => {
         </AppText>
         <SectionHeader title="Moderation actions" />
         <View className="flex-row flex-wrap gap-3">
-          <AppButton
-            label="Mark Reviewed"
-            onPress={() => mutation.mutate('reviewed')}
-            variant="secondary"
-          />
           <AppButton label="Resolve" onPress={() => mutation.mutate('resolved')} />
           <AppButton
             label="Dismiss"

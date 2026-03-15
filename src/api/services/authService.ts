@@ -1,51 +1,40 @@
-import { db } from '@/data/mockDb';
-import { AuthResponse, Session, User } from '@/types';
-import { generateId } from '@/utils/helpers';
+import { cache } from '@/data/cache';
+import { AuthResponse, Session } from '@/types';
 
-import { getCurrentRoleLabel, requireUser, simulate } from './base';
+import { apiRequest } from '../http';
+import { mapUser } from '../mappers';
 
-const OTP_CODE = '123456';
+const buildAuthResponse = (data: any): AuthResponse => {
+  const user = mapUser(data.user);
+  cache.syncUsers([user]);
 
-const buildSession = (user: User): AuthResponse => ({
-  session: {
-    accessToken: `access_${user.id}_${Date.now()}`,
-    refreshToken: `refresh_${user.id}_${Date.now()}`,
-    role: user.role,
-    userId: user.id,
-  },
-  user,
-});
+  return {
+    session: {
+      accessToken: data.accessToken,
+      refreshToken: data.refreshToken,
+      role: user.role,
+      userId: user.id,
+    },
+    user,
+  };
+};
 
 export const authService = {
   async studentLogin(email: string, password: string) {
-    return simulate(() => {
-      const user = db.users.find(
-        (item) => item.email.toLowerCase() === email.toLowerCase() && item.role === 'student'
-      );
-      if (!user || user.password !== password) {
-        throw new Error('Invalid student credentials');
-      }
-      if (!user.isVerified) {
-        throw new Error('Email not verified yet. Use OTP 123456 for the mock flow.');
-      }
-      if (user.status === 'suspended') {
-        throw new Error('This account is suspended');
-      }
-
-      return buildSession(user);
+    const response = await apiRequest<any>('/auth/login', {
+      method: 'POST',
+      json: { email, password },
     });
+
+    return buildAuthResponse(response.data);
   },
   async adminLogin(email: string, password: string) {
-    return simulate(() => {
-      const user = db.users.find(
-        (item) => item.email.toLowerCase() === email.toLowerCase() && item.role === 'admin'
-      );
-      if (!user || user.password !== password) {
-        throw new Error('Invalid admin credentials');
-      }
-
-      return buildSession(user);
+    const response = await apiRequest<any>('/auth/admin/login', {
+      method: 'POST',
+      json: { email, password },
     });
+
+    return buildAuthResponse(response.data);
   },
   async registerStudent(payload: {
     fullName: string;
@@ -55,136 +44,105 @@ export const authService = {
     departmentId: string;
     level: string;
   }) {
-    return simulate(() => {
-      const existing = db.users.find(
-        (item) => item.email.toLowerCase() === payload.email.toLowerCase()
-      );
-      if (existing) {
-        throw new Error('An account with this email already exists');
-      }
-
-      const id = generateId('student');
-      const user: User = {
-        id,
-        role: 'student',
+    const response = await apiRequest<any>('/auth/register', {
+      method: 'POST',
+      json: {
         fullName: payload.fullName,
         email: payload.email,
-        facultyId: payload.facultyId,
-        departmentId: payload.departmentId,
-        level: payload.level,
-        avatar: `https://api.dicebear.com/9.x/adventurer/png?seed=${encodeURIComponent(payload.fullName)}`,
-        isVerified: false,
-        status: 'active',
         password: payload.password,
-        createdAt: new Date().toISOString(),
-      };
+        faculty: payload.facultyId,
+        department: payload.departmentId,
+        level: Number(payload.level) || payload.level,
+      },
+    });
 
-      db.users.unshift(user);
-      db.profiles.unshift({
-        userId: id,
-        bio: 'Tell teammates about your strengths and final year interests.',
-        skills: [],
-        interests: [],
-        availability: 'part_time',
-        preferredRoles: [],
-        portfolioLinks: [],
-        visibility: 'public',
-        photoUrl: user.avatar,
-        completedProjectsCount: 0,
-        activeProjectsCount: 0,
-      });
-
-      return {
-        email: user.email,
-        message: 'Account created. Use OTP 123456 to verify email.',
-      };
-    }, 900);
+    return {
+      email: payload.email,
+      message: response.message,
+    };
   },
   async verifyEmailOtp(email: string, otp: string) {
-    return simulate(() => {
-      const user = db.users.find(
-        (item) => item.email.toLowerCase() === email.toLowerCase() && item.role === 'student'
-      );
-      if (!user) {
-        throw new Error('Student account not found');
-      }
-      if (otp !== OTP_CODE) {
-        throw new Error('Invalid OTP. Use 123456 for this mock build.');
-      }
-
-      user.isVerified = true;
-      return buildSession(user);
+    const response = await apiRequest<any>('/auth/verify-email', {
+      method: 'POST',
+      json: { email, otp },
     });
+
+    const user = mapUser(response.data);
+    cache.syncUsers([user]);
+
+    return { user, message: response.message };
   },
   async resendVerificationOtp(email: string) {
-    return simulate(() => {
-      const user = db.users.find((item) => item.email.toLowerCase() === email.toLowerCase());
-      if (!user) {
-        throw new Error('Account not found');
-      }
+    const response = await apiRequest('/auth/resend-verification-otp', {
+      method: 'POST',
+      json: { email },
+    });
 
-      return { message: `New verification code sent to ${email}. Use ${OTP_CODE}.` };
-    }, 600);
+    return { message: response.message };
   },
   async forgotPassword(email: string) {
-    return simulate(() => {
-      const user = db.users.find((item) => item.email.toLowerCase() === email.toLowerCase());
-      if (!user) {
-        throw new Error('Account not found');
-      }
+    const response = await apiRequest('/auth/forgot-password', {
+      method: 'POST',
+      json: { email },
+    });
 
-      return { email: user.email, message: `Password reset OTP sent. Use ${OTP_CODE}.` };
-    }, 700);
+    return { email, message: response.message };
   },
   async resetPassword(email: string, otp: string, password: string) {
-    return simulate(() => {
-      const user = db.users.find((item) => item.email.toLowerCase() === email.toLowerCase());
-      if (!user) {
-        throw new Error('Account not found');
-      }
-      if (otp !== OTP_CODE) {
-        throw new Error('Invalid OTP. Use 123456.');
-      }
+    const response = await apiRequest('/auth/reset-password', {
+      method: 'POST',
+      json: { email, otp, password },
+    });
 
-      user.password = password;
-      return { message: 'Password updated successfully' };
-    });
+    return { message: response.message };
   },
-  async changePassword(userId: string, currentPassword: string, newPassword: string) {
-    return simulate(() => {
-      const user = requireUser(userId);
-      if (user.password !== currentPassword) {
-        throw new Error('Current password is incorrect');
-      }
+  async changePassword(_userId: string, currentPassword: string, newPassword: string) {
+    const response = await apiRequest('/auth/change-password', {
+      method: 'POST',
+      auth: true,
+      json: { currentPassword, newPassword },
+    });
 
-      user.password = newPassword;
-      return { message: 'Password changed successfully' };
-    });
+    return { message: response.message };
   },
-  async deactivateAccount(userId: string) {
-    return simulate(() => {
-      const user = requireUser(userId);
-      user.status = 'suspended';
-      return { message: `${getCurrentRoleLabel(user.role)} account deactivated` };
+  async deactivateAccount(_userId: string) {
+    const response = await apiRequest('/auth/deactivate', {
+      method: 'PATCH',
+      auth: true,
     });
+
+    return { message: response.message };
   },
-  async softDeleteAccount(userId: string) {
-    return simulate(() => {
-      const user = requireUser(userId);
-      user.status = 'deleted';
-      return { message: 'Account removed from active listings' };
+  async softDeleteAccount(_userId: string) {
+    const response = await apiRequest('/auth/delete-account', {
+      method: 'DELETE',
+      auth: true,
     });
+
+    return { message: response.message };
   },
   async refreshSession(session: Session) {
-    return simulate(() => {
-      const user = requireUser(session.userId);
-      return buildSession(user);
-    }, 400);
+    const response = await apiRequest<any>('/auth/refresh', {
+      method: 'POST',
+      json: { refreshToken: session.refreshToken },
+    });
+
+    return buildAuthResponse(response.data);
   },
-  async getCurrentUser(userId: string) {
-    return simulate(() => requireUser(userId), 400);
+  async getCurrentUser(_userId: string) {
+    const response = await apiRequest<any>('/auth/me', {
+      auth: true,
+    });
+    const user = mapUser(response.data);
+    cache.syncUsers([user]);
+    return user;
   },
   async logout() {
-    return simulate(() => ({ success: true }), 250);
+    await apiRequest('/auth/logout', {
+      method: 'POST',
+      auth: true,
+    });
+
+    return { success: true };
   },
 };

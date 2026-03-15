@@ -16,18 +16,21 @@ import { useSession } from '@/hooks/useSession';
 
 export const MyProfileScreen = ({ navigation }: any) => {
   const { currentUser } = useSession();
-  const profileQuery = useProfile(currentUser?.id);
+  const profileQuery = useProfile(currentUser ? 'me' : undefined);
 
   if (profileQuery.isLoading || !profileQuery.data) {
     return <LoadingState label="Loading profile..." />;
   }
 
   const { user, profile } = profileQuery.data;
+  if (!user) {
+    return <LoadingState label="Loading profile..." />;
+  }
   const safeProfile = profile ?? {
     bio: '',
     skills: [],
     interests: [],
-    availability: 'part_time',
+    availability: 'available',
     preferredRoles: [],
     portfolioLinks: [],
     visibility: 'public',

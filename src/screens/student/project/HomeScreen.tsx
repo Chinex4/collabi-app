@@ -5,14 +5,11 @@ import {
   AppButton,
   AppHeader,
   AppScreen,
-  AppText,
-  Badge,
   EmptyState,
   LoadingState,
   SearchBar,
 } from '@/components/common';
 import { ProjectCard, ProjectFilters } from '@/components/project';
-import { db } from '@/data/mockDb';
 import { useProjects } from '@/hooks/useQueries';
 import { useSession } from '@/hooks/useSession';
 
@@ -21,9 +18,6 @@ export const HomeScreen = ({ navigation }: any) => {
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState<'latest' | 'deadline' | 'team_size'>('latest');
   const projects = useProjects({ search, sortBy }, currentUser?.id);
-  const latestAnnouncement = db.announcements.find(
-    (item) => item.audience === 'students' || item.audience === 'all'
-  );
 
   return (
     <AppScreen>
@@ -34,17 +28,6 @@ export const HomeScreen = ({ navigation }: any) => {
           <AppButton label="New Project" onPress={() => navigation.navigate('CreateProject')} />
         }
       />
-      {latestAnnouncement ? (
-        <View className="mb-5 rounded-[30px] bg-[#2C0B4E] p-5">
-          <Badge label="Campus Announcement" tone="primary" />
-          <AppText className="mt-3 text-xl font-bold text-white">
-            {latestAnnouncement.title}
-          </AppText>
-          <AppText className="mt-2 text-sm leading-6 text-violet-100">
-            {latestAnnouncement.body}
-          </AppText>
-        </View>
-      ) : null}
       <View className="mb-4">
         <SearchBar
           value={search}

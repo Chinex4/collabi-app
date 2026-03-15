@@ -1,14 +1,20 @@
-import { db } from '@/data/mockDb';
-import { generateId } from '@/utils/helpers';
+import { cache } from '@/data/cache';
 
-import { simulate } from './base';
+import { apiRequest } from '../http';
+import { mapReport } from '../mappers';
 
 export const reportService = {
-  async getMyReports(userId: string) {
-    return simulate(() => db.reports.filter((report) => report.reporterId === userId));
+  async getMyReports(_userId: string) {
+    const response = await apiRequest<any[]>('/reports', {
+      auth: true,
+    });
+
+    const items = response.data.map(mapReport);
+    cache.replaceReports(items);
+    return items;
   },
   async submitReport(
-    userId: string,
+    _userId: string,
     payload: {
       targetType: 'user' | 'project' | 'message';
       targetId: string;
@@ -16,16 +22,14 @@ export const reportService = {
       description?: string;
     }
   ) {
-    return simulate(() => {
-      const report = {
-        id: generateId('report'),
-        reporterId: userId,
-        status: 'pending' as const,
-        createdAt: new Date().toISOString(),
-        ...payload,
-      };
-      db.reports.unshift(report);
-      return report;
-    }, 650);
+    const response = await apiRequest<any>('/reports', {
+      method: 'POST',
+      auth: true,
+      json: payload,
+    });
+
+    const report = mapReport(response.data);
+    cache.syncReports([report]);
+    return report;
   },
 };

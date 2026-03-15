@@ -10,11 +10,11 @@ import { useAppDispatch } from '@/hooks/useAppStore';
 import { showToast } from '@/store/uiSlice';
 import { loginSchema } from '@/utils/validation';
 
-export const StudentLoginScreen = ({ navigation }: any) => {
+export const StudentLoginScreen = ({ navigation, route }: any) => {
   const dispatch = useAppDispatch();
   const { completeAuth } = useSession();
   const form = useAppForm({
-    defaultValues: { email: 'adaeze@university.edu', password: 'Password1!' },
+    defaultValues: { email: route?.params?.email ?? '', password: '' },
     schema: loginSchema,
   });
 

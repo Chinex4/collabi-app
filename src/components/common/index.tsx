@@ -15,6 +15,7 @@ import {
 
 import { PRIMARY_COLOR } from '@/constants';
 import { cn, initials } from '@/utils/helpers';
+import { StatusBar } from 'expo-status-bar';
 
 type Tone = 'primary' | 'success' | 'warning' | 'danger' | 'info' | 'muted';
 
@@ -36,7 +37,7 @@ export const AppText = ({
   className?: string;
   numberOfLines?: number;
 }) => (
-  <Text numberOfLines={numberOfLines} className={cn('text-[15px] text-slate-900', className)}>
+  <Text numberOfLines={numberOfLines} className={cn(' text-slate-900', className)}>
     {children}
   </Text>
 );
@@ -156,20 +157,26 @@ export const AppScreen = ({
   children,
   scroll = true,
   withGradient = false,
+  backgroundClassName = 'bg-[#F6F4FB]',
 }: {
   children: ReactNode;
   scroll?: boolean;
   withGradient?: boolean;
+  backgroundClassName?: string;
 }) => {
   const content = scroll ? (
-    <ScrollView
-      className="flex-1"
-      contentContainerStyle={{ padding: 20, paddingBottom: 40 }}
-      showsVerticalScrollIndicator={false}>
-      {children}
-    </ScrollView>
+    <>
+      <StatusBar style="dark" />
+      <ScrollView
+        className="flex-1 pt-12"
+        contentContainerStyle={{ padding: 20, paddingBottom: 40 }}
+        showsVerticalScrollIndicator={false}>
+          
+        {children}
+      </ScrollView>
+    </>
   ) : (
-    <View className="flex-1 px-5 py-5">{children}</View>
+    <View className="flex-1 px-5 py-5 pt-20">{children}</View>
   );
 
   if (withGradient) {
@@ -180,7 +187,7 @@ export const AppScreen = ({
     );
   }
 
-  return <SafeAreaView className="flex-1 bg-[#F6F4FB]">{content}</SafeAreaView>;
+  return <SafeAreaView className={cn('flex-1', backgroundClassName)}>{content}</SafeAreaView>;
 };
 
 export const SectionHeader = ({ title, action }: { title: string; action?: ReactNode }) => (
@@ -217,8 +224,14 @@ export const ErrorState = ({ message, onRetry }: { message: string; onRetry?: ()
   </View>
 );
 
-export const LoadingState = ({ label = 'Loading...' }: { label?: string }) => (
-  <View className="items-center justify-center py-14">
+export const LoadingState = ({
+  label = 'Loading...',
+  fullscreen = false,
+}: {
+  label?: string;
+  fullscreen?: boolean;
+}) => (
+  <View className={cn('items-center justify-center py-14', fullscreen ? 'flex-1 px-5' : '')}>
     <ActivityIndicator color={PRIMARY_COLOR} />
     <AppText className="mt-3 text-sm text-slate-500">{label}</AppText>
   </View>

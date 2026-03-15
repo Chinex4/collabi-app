@@ -33,7 +33,7 @@ export const EditProfileScreen = ({ navigation }: any) => {
       bio: profile?.bio ?? '',
       skills: profile?.skills ?? [],
       interests: profile?.interests ?? [],
-      availability: profile?.availability ?? 'part_time',
+      availability: profile?.availability ?? 'available',
       preferredRoles: profile?.preferredRoles ?? [],
       portfolioLinks: profile?.portfolioLinks.join(', ') ?? '',
       visibility: profile?.visibility ?? 'public',
@@ -62,8 +62,11 @@ export const EditProfileScreen = ({ navigation }: any) => {
   });
 
   const photoMutation = useMutation({
-    mutationFn: () => uploadService.uploadMock(currentUser!.id, 'profile', 'profile-photo.jpg'),
+    mutationFn: () => uploadService.pickImage(currentUser!.id, 'profile'),
     onSuccess: (file) => {
+      if (!file) {
+        return;
+      }
       setPhotoUrl(file.url);
       dispatch(showToast({ type: 'success', message: 'Profile photo updated' }));
     },

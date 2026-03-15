@@ -5,14 +5,12 @@ import { View } from 'react-native';
 import { authService } from '@/api/services/authService';
 import { AppButton, AppScreen, AppText } from '@/components/common';
 import { FormOtpInput, useAppForm } from '@/components/forms';
-import { useSession } from '@/hooks/useSession';
 import { useAppDispatch } from '@/hooks/useAppStore';
 import { showToast } from '@/store/uiSlice';
 import { otpSchema } from '@/utils/validation';
 
-export const VerifyEmailOtpScreen = ({ route }: any) => {
+export const VerifyEmailOtpScreen = ({ navigation, route }: any) => {
   const dispatch = useAppDispatch();
-  const { completeAuth } = useSession();
   const email = route?.params?.email ?? '';
   const form = useAppForm({
     defaultValues: { otp: '' },
@@ -21,9 +19,9 @@ export const VerifyEmailOtpScreen = ({ route }: any) => {
 
   const mutation = useMutation({
     mutationFn: (values: { otp: string }) => authService.verifyEmailOtp(email, values.otp),
-    onSuccess: async (result) => {
-      await completeAuth(result);
-      dispatch(showToast({ type: 'success', message: 'Email verified' }));
+    onSuccess: () => {
+      dispatch(showToast({ type: 'success', message: 'Email verified. Please sign in.' }));
+      navigation.replace('StudentLogin', { email });
     },
     onError: (error: Error) => dispatch(showToast({ type: 'error', message: error.message })),
   });
@@ -37,7 +35,7 @@ export const VerifyEmailOtpScreen = ({ route }: any) => {
     <AppScreen withGradient>
       <AppText className="text-3xl font-bold text-slate-950">Verify Email</AppText>
       <AppText className="mt-2 text-sm text-slate-500">
-        We sent a code to {email || 'your email'}. For the mock flow, use `123456`.
+        We sent a code to {email || 'your email'}.
       </AppText>
       <View className="mt-8 rounded-[32px] bg-white p-5">
         <FormOtpInput control={form.control} name="otp" label="Verification code" />

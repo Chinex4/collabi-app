@@ -72,7 +72,10 @@ export const ChatThreadScreen = ({ route, mode }: { route: any; mode: 'private' 
       if (!resolvedConversationId) {
         throw new Error('Conversation not ready');
       }
-      const file = await uploadService.uploadMock(currentUser!.id, 'chat', 'chat-note.pdf');
+      const file = await uploadService.pickDocument(currentUser!.id, 'chat');
+      if (!file) {
+        return null;
+      }
       return chatService.sendMessage(
         resolvedConversationId,
         currentUser!.id,
@@ -80,7 +83,10 @@ export const ChatThreadScreen = ({ route, mode }: { route: any; mode: 'private' 
         [file]
       );
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
+      if (!result) {
+        return;
+      }
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.messages });
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.conversations });
       dispatch(showToast({ type: 'success', message: 'Attachment shared' }));

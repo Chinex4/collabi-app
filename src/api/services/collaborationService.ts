@@ -1,239 +1,257 @@
+import { cache } from '@/data/cache';
 import { db } from '@/data/mockDb';
-import { ApplicationStatus, InvitationStatus } from '@/types';
-import { generateId } from '@/utils/helpers';
 
-import {
-  addNotification,
-  ensureProjectConversation,
-  getDisplayName,
-  recalcProjectMembers,
-  requireProject,
-  requireStudent,
-  simulate,
-} from './base';
+import { apiRequest } from '../http';
+import { mapApplication, mapInvitation, mapMembership, mapProject, mapUser } from '../mappers';
 
-const activateMember = (projectId: string, studentId: string, roleName = 'Contributor') => {
-  const existing = db.memberships.find(
-    (membership) => membership.projectId === projectId && membership.studentId === studentId
-  );
-
-  if (existing) {
-    existing.status = 'active';
-    existing.roleName = roleName;
-  } else {
-    db.memberships.unshift({
-      id: generateId('membership'),
-      projectId,
-      studentId,
-      roleName,
-      status: 'active',
-      joinedAt: new Date().toISOString(),
-    });
+const syncRelatedEntity = (raw: any) => {
+  if (raw.project && typeof raw.project === 'object') {
+    cache.syncProjects([mapProject(raw.project)]);
   }
-
-  const project = requireProject(projectId);
-  recalcProjectMembers(project);
-  const conversation = ensureProjectConversation(projectId);
-  if (!conversation.participantIds.includes(studentId)) {
-    conversation.participantIds.push(studentId);
-    conversation.unreadBy[studentId] = 0;
-    conversation.presence[studentId] = 'online';
+  if (raw.applicant && typeof raw.applicant === 'object') {
+    cache.syncUsers([mapUser(raw.applicant)]);
+  }
+  if (raw.invitedUser && typeof raw.invitedUser === 'object') {
+    cache.syncUsers([mapUser(raw.invitedUser)]);
+  }
+  if (raw.invitedBy && typeof raw.invitedBy === 'object') {
+    cache.syncUsers([mapUser(raw.invitedBy)]);
+  }
+  if (raw.user && typeof raw.user === 'object') {
+    cache.syncUsers([mapUser(raw.user)]);
   }
 };
 
 export const collaborationService = {
-  async applyToProject(projectId: string, studentId: string, message: string) {
-    return simulate(() => {
-      requireProject(projectId);
-      requireStudent(studentId);
+  async applyToProject(projectId: string, _studentId: string, message: string) {
+    const response = await apiRequest<any>(`/projects/${projectId}/applications`, {
+      method: 'POST',
+      auth: true,
+      json: { message },
+    });
 
-      const existing = db.applications.find(
-        (application) =>
-          application.projectId === projectId &&
-          application.studentId === studentId &&
-          application.status === 'pending'
-      );
-      if (existing) {
-        throw new Error('You already have a pending application for this project');
-      }
-
-      const application = {
-        id: generateId('application'),
-        projectId,
-        studentId,
-        message,
-        status: 'pending' as ApplicationStatus,
-        createdAt: new Date().toISOString(),
-      };
-
-      db.applications.unshift(application);
-      const project = requireProject(projectId);
-      addNotification({
-        userId: project.ownerId,
-        type: 'application',
-        title: 'New project application',
-        body: `${getDisplayName(requireStudent(studentId))} applied to ${project.title}.`,
-        entityType: 'application',
-        entityId: application.id,
-        isRead: false,
-      });
-      return application;
-    }, 700);
+    syncRelatedEntity(response.data);
+    const application = mapApplication(response.data);
+    cache.syncApplications([application]);
+    return application;
   },
   async withdrawApplication(applicationId: string) {
-    return simulate(() => {
-      const application = db.applications.find((item) => item.id === applicationId);
-      if (!application) {
-        throw new Error('Application not found');
-      }
+    const application = db.applications.find((item) => item.id === applicationId);
+    if (!application) {
+      throw new Error('Application not found');
+    }
 
-      application.status = 'withdrawn';
-      return application;
-    });
-  },
-  async getMyApplications(studentId: string) {
-    return simulate(() =>
-      db.applications.filter((application) => application.studentId === studentId)
+    const response = await apiRequest<any>(
+      `/projects/${application.projectId}/applications/${applicationId}/withdraw`,
+      {
+        method: 'DELETE',
+        auth: true,
+      }
     );
+
+    const updated = { ...application, status: 'withdrawn' as const };
+    cache.syncApplications([updated]);
+    return mapApplication(response.data ?? updated);
+  },
+  async getMyApplications(_studentId: string) {
+    const response = await apiRequest<any[]>('/projects/applications/me', {
+      auth: true,
+    });
+
+    const items = response.data.map((item) => {
+      syncRelatedEntity(item);
+      return mapApplication(item);
+    });
+    cache.replaceApplications(items);
+    return items;
   },
   async getProjectApplications(projectId: string) {
-    return simulate(() =>
-      db.applications.filter((application) => application.projectId === projectId)
-    );
+    const response = await apiRequest<any[]>(`/projects/${projectId}/applications`, {
+      auth: true,
+    });
+
+    const items = response.data.map((item) => {
+      syncRelatedEntity(item);
+      return mapApplication(item);
+    });
+    cache.replaceApplications(items);
+    return items;
   },
   async updateApplicationStatus(
     applicationId: string,
-    status: Extract<ApplicationStatus, 'accepted' | 'rejected'>
+    status: 'accepted' | 'rejected'
   ) {
-    return simulate(() => {
-      const application = db.applications.find((item) => item.id === applicationId);
-      if (!application) {
-        throw new Error('Application not found');
+    const application = db.applications.find((item) => item.id === applicationId);
+    if (!application) {
+      throw new Error('Application not found');
+    }
+
+    const response = await apiRequest<any>(
+      `/projects/${application.projectId}/applications/${applicationId}/${status === 'accepted' ? 'accept' : 'reject'}`,
+      {
+        method: 'PATCH',
+        auth: true,
       }
-
-      application.status = status;
-      const project = requireProject(application.projectId);
-      if (status === 'accepted') {
-        activateMember(application.projectId, application.studentId);
-      }
-
-      addNotification({
-        userId: application.studentId,
-        type: 'application',
-        title: `Application ${status}`,
-        body: `Your application to ${project.title} was ${status}.`,
-        entityType: 'application',
-        entityId: application.id,
-        isRead: false,
-      });
-      return application;
-    }, 750);
-  },
-  async inviteStudent(projectId: string, senderId: string, studentId: string, message: string) {
-    return simulate(() => {
-      const project = requireProject(projectId);
-      const invitee = requireStudent(studentId);
-      const invitation = {
-        id: generateId('invitation'),
-        projectId,
-        studentId,
-        senderId,
-        message,
-        status: 'pending' as InvitationStatus,
-        createdAt: new Date().toISOString(),
-      };
-
-      db.invitations.unshift(invitation);
-      addNotification({
-        userId: invitee.id,
-        type: 'invitation',
-        title: 'Team invitation received',
-        body: `${getDisplayName(requireStudent(senderId))} invited you to join ${project.title}.`,
-        entityType: 'invitation',
-        entityId: invitation.id,
-        isRead: false,
-      });
-      return invitation;
-    });
-  },
-  async getReceivedInvitations(studentId: string) {
-    return simulate(() =>
-      db.invitations.filter((invitation) => invitation.studentId === studentId)
     );
+
+    syncRelatedEntity(response.data);
+    const updated = mapApplication(response.data);
+    cache.syncApplications([updated]);
+    return updated;
+  },
+  async inviteStudent(projectId: string, _senderId: string, studentId: string, message: string) {
+    const response = await apiRequest<any>(`/projects/${projectId}/invitations`, {
+      method: 'POST',
+      auth: true,
+      json: { invitedUser: studentId, message },
+    });
+
+    syncRelatedEntity(response.data);
+    const invitation = mapInvitation(response.data);
+    cache.syncInvitations([invitation]);
+    return invitation;
+  },
+  async getReceivedInvitations(_studentId: string) {
+    const response = await apiRequest<any[]>('/projects/invitations/received', {
+      auth: true,
+    });
+
+    const items = response.data.map((item) => {
+      syncRelatedEntity(item);
+      return mapInvitation(item);
+    });
+    cache.replaceInvitations(items);
+    return items;
   },
   async getSentInvitations(senderId: string) {
-    return simulate(() => db.invitations.filter((invitation) => invitation.senderId === senderId));
+    const projects = await apiRequest<any[]>('/projects/mine', {
+      auth: true,
+    });
+
+    const sent = await Promise.all(
+      projects.data
+        .map((project) => extractProjectId(project))
+        .filter(Boolean)
+        .map((projectId) =>
+          apiRequest<any[]>(`/projects/${projectId}/invitations`, {
+            auth: true,
+          })
+        )
+    );
+
+    const items = sent
+      .flatMap((result) => result.data)
+      .map((item) => {
+        syncRelatedEntity(item);
+        const invitation = mapInvitation(item);
+        return {
+          ...invitation,
+          senderId,
+        };
+      });
+
+    cache.replaceInvitations(items);
+    return items;
   },
   async updateInvitationStatus(
     invitationId: string,
-    status: Extract<InvitationStatus, 'accepted' | 'declined' | 'cancelled'>
+    status: 'accepted' | 'declined' | 'cancelled'
   ) {
-    return simulate(() => {
-      const invitation = db.invitations.find((item) => item.id === invitationId);
-      if (!invitation) {
-        throw new Error('Invitation not found');
-      }
+    const invitation = db.invitations.find((item) => item.id === invitationId);
+    if (!invitation) {
+      throw new Error('Invitation not found');
+    }
 
-      invitation.status = status;
-      const project = requireProject(invitation.projectId);
-      if (status === 'accepted') {
-        activateMember(invitation.projectId, invitation.studentId);
-      }
+    const path =
+      status === 'accepted'
+        ? `/projects/invitations/${invitationId}/accept`
+        : status === 'declined'
+          ? `/projects/invitations/${invitationId}/decline`
+          : `/projects/${invitation.projectId}/invitations/${invitationId}/cancel`;
 
-      addNotification({
-        userId: invitation.senderId,
-        type: 'team',
-        title: `Invitation ${status}`,
-        body: `${getDisplayName(requireStudent(invitation.studentId))} ${status} the invite to ${project.title}.`,
-        entityType: 'invitation',
-        entityId: invitation.id,
-        isRead: false,
-      });
-      return invitation;
-    }, 700);
+    const response = await apiRequest<any>(path, {
+      method: status === 'cancelled' ? 'DELETE' : 'PATCH',
+      auth: true,
+    });
+
+    syncRelatedEntity(response.data);
+    const updated = mapInvitation(response.data ?? { ...invitation, status });
+    cache.syncInvitations([updated]);
+    return updated;
   },
   async getTeamMembers(projectId: string) {
-    return simulate(() =>
-      db.memberships.filter(
-        (membership) => membership.projectId === projectId && membership.status === 'active'
-      )
-    );
+    const response = await apiRequest<any[]>(`/projects/${projectId}/members`, {
+      auth: true,
+    });
+
+    const items = response.data.map((item) => {
+      syncRelatedEntity(item);
+      return mapMembership(item);
+    });
+    cache.replaceMemberships(items);
+
+    const project = db.projects.find((item) => item.id === projectId);
+    if (project) {
+      cache.syncProjects([
+        {
+          ...project,
+          teamMemberIds: items.map((item) => item.studentId),
+          currentTeamSize: items.length,
+        },
+      ]);
+    }
+
+    return items;
   },
   async updateMemberRole(membershipId: string, roleName: string) {
-    return simulate(() => {
-      const membership = db.memberships.find((item) => item.id === membershipId);
-      if (!membership) {
-        throw new Error('Member not found');
-      }
-      membership.roleName = roleName;
-      return membership;
+    const membership = db.memberships.find((item) => item.id === membershipId);
+    if (!membership) {
+      throw new Error('Member not found');
+    }
+
+    const response = await apiRequest<any>(`/projects/${membership.projectId}/members/assign-role`, {
+      method: 'PATCH',
+      auth: true,
+      json: {
+        memberUserId: membership.studentId,
+        roleName,
+      },
     });
+
+    syncRelatedEntity(response.data);
+    const updated = mapMembership(response.data);
+    cache.syncMemberships([updated]);
+    return updated;
   },
   async removeMember(membershipId: string) {
-    return simulate(() => {
-      const membership = db.memberships.find((item) => item.id === membershipId);
-      if (!membership) {
-        throw new Error('Member not found');
-      }
-      membership.status = 'removed';
-      const project = requireProject(membership.projectId);
-      recalcProjectMembers(project);
-      return membership;
+    const membership = db.memberships.find((item) => item.id === membershipId);
+    if (!membership) {
+      throw new Error('Member not found');
+    }
+
+    const response = await apiRequest<any>(`/projects/${membership.projectId}/members/remove`, {
+      method: 'DELETE',
+      auth: true,
+      json: {
+        memberUserId: membership.studentId,
+      },
     });
+
+    const updated = mapMembership(response.data ?? { ...membership, status: 'removed' });
+    cache.syncMemberships([updated]);
+    return updated;
   },
-  async leaveTeam(projectId: string, studentId: string) {
-    return simulate(() => {
-      const membership = db.memberships.find(
-        (item) =>
-          item.projectId === projectId && item.studentId === studentId && item.status === 'active'
-      );
-      if (!membership) {
-        throw new Error('Membership not found');
-      }
-      membership.status = 'left';
-      const project = requireProject(projectId);
-      recalcProjectMembers(project);
-      return membership;
+  async leaveTeam(projectId: string, _studentId: string) {
+    const response = await apiRequest<any>(`/projects/${projectId}/members/leave`, {
+      method: 'DELETE',
+      auth: true,
     });
+
+    const updated = mapMembership(response.data);
+    cache.syncMemberships([updated]);
+    return updated;
   },
 };
+
+const extractProjectId = (project: any) =>
+  typeof project === 'string' ? project : project?._id ?? project?.id ?? '';

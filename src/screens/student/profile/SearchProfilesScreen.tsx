@@ -11,12 +11,12 @@ import {
   SectionHeader,
 } from '@/components/common';
 import { ProfileCard } from '@/components/profile';
-import { db } from '@/data/mockDb';
-import { useProfiles } from '@/hooks/useQueries';
+import { useLookups, useProfiles } from '@/hooks/useQueries';
 
 export const SearchProfilesScreen = ({ navigation }: any) => {
   const [search, setSearch] = useState('');
   const [skillFilter, setSkillFilter] = useState<string[]>([]);
+  const lookups = useLookups();
   const profilesQuery = useProfiles({ search, skillIds: skillFilter });
 
   return (
@@ -27,7 +27,7 @@ export const SearchProfilesScreen = ({ navigation }: any) => {
       />
       <SearchBar value={search} onChangeText={setSearch} placeholder="Search students or bio" />
       <View className="mt-4 flex-row flex-wrap">
-        {db.skills.slice(0, 6).map((skill) => {
+        {(lookups.data?.skills ?? []).slice(0, 6).map((skill) => {
           const active = skillFilter.includes(skill.id);
           return (
             <Chip
@@ -51,7 +51,9 @@ export const SearchProfilesScreen = ({ navigation }: any) => {
             key={user.id}
             user={user}
             profile={profile}
-            onPress={() => navigation.navigate('PublicProfile', { userId: user.id })}
+            onPress={() =>
+              navigation.navigate('PublicProfile', { userId: user.id, profileId: profile?.id })
+            }
           />
         ))
       ) : (

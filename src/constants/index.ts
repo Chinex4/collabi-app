@@ -26,10 +26,9 @@ export const PREFERRED_ROLES = [
 ];
 
 export const AVAILABILITY_OPTIONS: { label: string; value: Availability }[] = [
-  { label: 'Part-time', value: 'part_time' },
-  { label: 'Weekends', value: 'weekends' },
-  { label: 'Full-time', value: 'full_time' },
-  { label: 'Flexible', value: 'flexible' },
+  { label: 'Available', value: 'available' },
+  { label: 'Busy', value: 'busy' },
+  { label: 'Unavailable', value: 'unavailable' },
 ];
 
 export const PROJECT_STATUS_OPTIONS: { label: string; value: ProjectStatus }[] = [
