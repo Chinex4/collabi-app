@@ -1,40 +1,53 @@
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 
+import { uploadToCloudinary } from '@/api/cloudinary';
 import { FileResource } from '@/types';
-
-import { apiRequest } from '../http';
-import { mapFileResource } from '../mappers';
 
 type Context = FileResource['context'];
 
+const mimeFromCloudinary = (resourceType: string, format?: string, fallback?: string | null) => {
+  if (fallback) {
+    return fallback;
+  }
+  if (resourceType === 'image' && format) {
+    return `image/${format === 'jpg' ? 'jpeg' : format}`;
+  }
+  if (resourceType === 'video' && format) {
+    return `video/${format}`;
+  }
+  return 'application/octet-stream';
+};
+
+const makeFileName = (name: string | null | undefined, resultName: string | undefined) =>
+  name ?? (resultName ? `${resultName}` : 'Upload');
+
 const uploadAsset = async (
+  uploadedBy: string,
   asset: {
     uri: string;
     mimeType?: string | null;
     name?: string | null;
+    size?: number | null;
   },
   context: Context
-) => {
-  const formData = new FormData();
-  formData.append('contextType', context);
-  formData.append('file', {
-    uri: asset.uri,
-    name: asset.name ?? 'upload',
-    type: asset.mimeType ?? 'application/octet-stream',
-  } as any);
+): Promise<FileResource> => {
+  const result = await uploadToCloudinary(asset, context, uploadedBy);
 
-  const response = await apiRequest<any>('/files/upload', {
-    method: 'POST',
-    auth: true,
-    body: formData,
-  });
-
-  return mapFileResource(response.data);
+  return {
+    id: result.public_id,
+    name: makeFileName(asset.name, result.original_filename),
+    url: result.secure_url,
+    type: mimeFromCloudinary(result.resource_type, result.format, asset.mimeType),
+    sizeKb: Math.max(1, Math.ceil((asset.size ?? result.bytes ?? 0) / 1024)),
+    uploadedAt: result.created_at,
+    uploadedBy,
+    context,
+  };
 };
 
 export const uploadService = {
-  async pickDocument(_uploadedBy: string, context: Context) {
+  async pickDocument(uploadedBy: string, context: Context) {
     const result = await DocumentPicker.getDocumentAsync({
       multiple: false,
       copyToCacheDirectory: true,
@@ -45,15 +58,17 @@ export const uploadService = {
 
     const asset = result.assets[0];
     return uploadAsset(
+      uploadedBy,
       {
         uri: asset.uri,
         mimeType: asset.mimeType,
         name: asset.name,
+        size: asset.size,
       },
       context
     );
   },
-  async pickImage(_uploadedBy: string, context: Context) {
+  async pickImage(uploadedBy: string, context: Context) {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
       allowsEditing: true,
@@ -65,10 +80,12 @@ export const uploadService = {
 
     const asset = result.assets[0];
     return uploadAsset(
+      uploadedBy,
       {
         uri: asset.uri,
         mimeType: asset.mimeType,
         name: asset.fileName ?? 'image.jpg',
+        size: asset.fileSize,
       },
       context
     );

@@ -1,20 +1,27 @@
 import { cache } from '@/data/cache';
 
-import { apiRequest } from '../http';
+import { throwIfSupabaseError } from '../errors';
 import { mapReport } from '../mappers';
+import { supabase } from '../supabase';
+
+const supabaseAny = supabase as any;
 
 export const reportService = {
-  async getMyReports(_userId: string) {
-    const response = await apiRequest<any[]>('/reports', {
-      auth: true,
-    });
+  async getMyReports(userId: string) {
+    const { data, error } = await supabaseAny
+      .from('reports')
+      .select('*')
+      .eq('reporter_id', userId)
+      .order('created_at', { ascending: false });
 
-    const items = response.data.map(mapReport);
+    throwIfSupabaseError(error);
+
+    const items = (data ?? []).map(mapReport);
     cache.replaceReports(items);
     return items;
   },
   async submitReport(
-    _userId: string,
+    userId: string,
     payload: {
       targetType: 'user' | 'project' | 'message';
       targetId: string;
@@ -22,13 +29,21 @@ export const reportService = {
       description?: string;
     }
   ) {
-    const response = await apiRequest<any>('/reports', {
-      method: 'POST',
-      auth: true,
-      json: payload,
-    });
+    const { data, error } = await supabaseAny
+      .from('reports')
+      .insert({
+        reporter_id: userId,
+        target_type: payload.targetType,
+        target_id: payload.targetId,
+        reason: payload.reason,
+        description: payload.description,
+      })
+      .select('*')
+      .single();
 
-    const report = mapReport(response.data);
+    throwIfSupabaseError(error);
+
+    const report = mapReport(data);
     cache.syncReports([report]);
     return report;
   },

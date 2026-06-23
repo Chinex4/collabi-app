@@ -1,57 +1,93 @@
 import { cache } from '@/data/cache';
-import { db } from '@/data/mockDb';
-import { ProfileFilterInput } from '@/types';
+import { ProfileFilterInput, StudentProfile, User } from '@/types';
 
-import { apiRequest } from '../http';
+import { requireData, throwIfSupabaseError } from '../errors';
 import { mapProfile, mapUser } from '../mappers';
+import { supabase } from '../supabase';
 
-const buildPortfolioLinks = (links: string[]) => ({
-  github: links[0] || undefined,
-  linkedin: links[1] || undefined,
-  portfolio: links[2] || undefined,
-});
+const supabaseAny = supabase as any;
+
+const profileSelect = `
+  *,
+  user:users(*),
+  skills:student_profile_skills(skill:skills(*)),
+  interests:student_profile_interests(interest:interests(*))
+`;
+
+const syncProfileRow = (row: any) => {
+  const profile = mapProfile(row);
+  const user = row.user ? mapUser(row.user) : null;
+
+  cache.syncProfiles([profile]);
+  if (user) {
+    cache.syncUsers([user]);
+  }
+
+  return { user, profile };
+};
 
 export const profileService = {
   async getProfile(profileId: string) {
-    const endpoint = profileId === 'me' ? '/profiles/me' : `/profiles/${profileId}`;
-    const response = await apiRequest<any>(endpoint, {
-      auth: profileId === 'me',
-    });
+    const userId = profileId === 'me' ? (await supabase.auth.getUser()).data.user?.id : profileId;
 
-    const raw = response.data;
-    const user = raw.user ? mapUser(raw.user) : null;
-    const profile = raw._id ? mapProfile(raw) : mapProfile(raw.profile ?? raw);
-
-    if (user) {
-      cache.syncUsers([user]);
+    if (!userId) {
+      throw new Error('Current user not found');
     }
-    cache.syncProfiles([profile]);
 
-    return { user: user ?? cacheFallbackUser(profile.userId), profile };
+    const { data, error } = await supabase
+      .from('student_profiles')
+      .select(profileSelect)
+      .eq('user_id', userId)
+      .single();
+
+    throwIfSupabaseError(error);
+
+    const result = syncProfileRow(requireData(data));
+    return { user: result.user, profile: result.profile };
   },
   async getProfiles(filters: ProfileFilterInput = {}) {
-    const response = await apiRequest<any[]>('/profiles', {
-      query: {
-        search: filters.search,
-        department: filters.departmentId,
-        skill: filters.skillIds?.[0],
-        interest: filters.interestIds?.[0],
-        availability: filters.availability,
-      },
-    });
+    let query = supabase
+      .from('student_profiles')
+      .select(profileSelect)
+      .order('updated_at', { ascending: false })
+      .limit(50);
 
-    const profiles = response.data.map((item) => {
-      const user = mapUser(item.user);
-      const profile = mapProfile(item);
-      cache.syncUsers([user]);
-      cache.syncProfiles([profile]);
-      return { user, profile };
-    });
+    if (filters.search) {
+      query = query.textSearch('bio', filters.search, { type: 'websearch' });
+    }
+    if (filters.availability) {
+      query = query.eq('availability', filters.availability);
+    }
 
-    return profiles;
+    const { data, error } = await query;
+    throwIfSupabaseError(error);
+
+    return (data ?? [])
+      .map(syncProfileRow)
+      .filter((item): item is { user: User; profile: StudentProfile } => {
+        if (!item.user) {
+          return false;
+        }
+        if (filters.departmentId && item.user?.departmentId !== filters.departmentId) {
+          return false;
+        }
+        if (
+          filters.skillIds?.length &&
+          !filters.skillIds.some((skillId) => item.profile.skills.includes(skillId))
+        ) {
+          return false;
+        }
+        if (
+          filters.interestIds?.length &&
+          !filters.interestIds.some((interestId) => item.profile.interests.includes(interestId))
+        ) {
+          return false;
+        }
+        return true;
+      });
   },
   async updateProfile(
-    _userId: string,
+    userId: string,
     updates: {
       bio: string;
       skills: string[];
@@ -63,30 +99,19 @@ export const profileService = {
       photoUrl?: string;
     }
   ) {
-    const response = await apiRequest<any>('/profiles/me', {
-      method: 'PATCH',
-      auth: true,
-      json: {
-        bio: updates.bio,
-        skills: updates.skills.map((skill) => ({ skill, level: 'intermediate' })),
-        interests: updates.interests,
-        availability: updates.availability,
-        preferredRoles: updates.preferredRoles,
-        portfolioLinks: buildPortfolioLinks(updates.portfolioLinks),
-        visibility: updates.visibility,
-      },
+    const { error } = await supabaseAny.rpc('update_student_profile', {
+      p_bio: updates.bio,
+      p_availability: updates.availability as any,
+      p_preferred_roles: updates.preferredRoles,
+      p_portfolio_links: updates.portfolioLinks,
+      p_visibility: updates.visibility as any,
+      p_skill_ids: updates.skills,
+      p_interest_ids: updates.interests,
+      p_photo_url: updates.photoUrl ?? null,
     });
 
-    const profile = mapProfile(response.data);
-    const user = response.data.user ? mapUser(response.data.user) : cacheFallbackUser(profile.userId);
-    if (user) {
-      const avatar = updates.photoUrl ?? user.avatar;
-      cache.syncUsers([{ ...user, avatar }]);
-    }
-    cache.syncProfiles([{ ...profile, photoUrl: updates.photoUrl ?? profile.photoUrl }]);
+    throwIfSupabaseError(error);
 
-    return { user, profile };
+    return this.getProfile(userId);
   },
 };
-
-const cacheFallbackUser = (userId: string) => db.users.find((item) => item.id === userId) ?? null;

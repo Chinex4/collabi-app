@@ -1,64 +1,89 @@
 import { cache } from '@/data/cache';
 import { db } from '@/data/mockDb';
 
-import { apiRequest } from '../http';
+import { requireData, throwIfSupabaseError } from '../errors';
 import { mapApplication, mapInvitation, mapMembership, mapProject, mapUser } from '../mappers';
+import { supabase } from '../supabase';
+
+const supabaseAny = supabase as any;
+
+const applicationSelect = '*, project:projects(*), student:users(*)';
+const invitationSelect = '*, project:projects(*), student:users(*), sender:users(*)';
+const membershipSelect = '*, project:projects(*), student:users(*)';
 
 const syncRelatedEntity = (raw: any) => {
   if (raw.project && typeof raw.project === 'object') {
     cache.syncProjects([mapProject(raw.project)]);
   }
-  if (raw.applicant && typeof raw.applicant === 'object') {
-    cache.syncUsers([mapUser(raw.applicant)]);
-  }
-  if (raw.invitedUser && typeof raw.invitedUser === 'object') {
-    cache.syncUsers([mapUser(raw.invitedUser)]);
-  }
-  if (raw.invitedBy && typeof raw.invitedBy === 'object') {
-    cache.syncUsers([mapUser(raw.invitedBy)]);
-  }
-  if (raw.user && typeof raw.user === 'object') {
-    cache.syncUsers([mapUser(raw.user)]);
+  const user =
+    raw.student ?? raw.sender ?? raw.user ?? raw.applicant ?? raw.invitedUser ?? raw.invitedBy;
+  if (user && typeof user === 'object') {
+    cache.syncUsers([mapUser(user)]);
   }
 };
 
-export const collaborationService = {
-  async applyToProject(projectId: string, _studentId: string, message: string) {
-    const response = await apiRequest<any>(`/projects/${projectId}/applications`, {
-      method: 'POST',
-      auth: true,
-      json: { message },
-    });
+const getApplication = async (applicationId: string) => {
+  const { data, error } = await supabaseAny
+    .from('applications')
+    .select(applicationSelect)
+    .eq('id', applicationId)
+    .single();
 
-    syncRelatedEntity(response.data);
-    const application = mapApplication(response.data);
+  throwIfSupabaseError(error);
+  syncRelatedEntity(data);
+  return mapApplication(requireData(data, 'Application not found'));
+};
+
+const getInvitation = async (invitationId: string) => {
+  const { data, error } = await supabaseAny
+    .from('invitations')
+    .select(invitationSelect)
+    .eq('id', invitationId)
+    .single();
+
+  throwIfSupabaseError(error);
+  syncRelatedEntity(data);
+  return mapInvitation(requireData(data, 'Invitation not found'));
+};
+
+export const collaborationService = {
+  async applyToProject(projectId: string, studentId: string, message: string) {
+    const { data, error } = await supabaseAny
+      .from('applications')
+      .insert({ project_id: projectId, student_id: studentId, message })
+      .select(applicationSelect)
+      .single();
+
+    throwIfSupabaseError(error);
+    syncRelatedEntity(data);
+
+    const application = mapApplication(data);
     cache.syncApplications([application]);
     return application;
   },
   async withdrawApplication(applicationId: string) {
-    const application = db.applications.find((item) => item.id === applicationId);
-    if (!application) {
-      throw new Error('Application not found');
-    }
+    const { data, error } = await supabaseAny
+      .from('applications')
+      .update({ status: 'withdrawn' })
+      .eq('id', applicationId)
+      .select(applicationSelect)
+      .single();
 
-    const response = await apiRequest<any>(
-      `/projects/${application.projectId}/applications/${applicationId}/withdraw`,
-      {
-        method: 'DELETE',
-        auth: true,
-      }
-    );
-
-    const updated = { ...application, status: 'withdrawn' as const };
-    cache.syncApplications([updated]);
-    return mapApplication(response.data ?? updated);
+    throwIfSupabaseError(error);
+    const application = mapApplication(data);
+    cache.syncApplications([application]);
+    return application;
   },
-  async getMyApplications(_studentId: string) {
-    const response = await apiRequest<any[]>('/projects/applications/me', {
-      auth: true,
-    });
+  async getMyApplications(studentId: string) {
+    const { data, error } = await supabaseAny
+      .from('applications')
+      .select(applicationSelect)
+      .eq('student_id', studentId)
+      .order('created_at', { ascending: false });
 
-    const items = response.data.map((item) => {
+    throwIfSupabaseError(error);
+
+    const items = (data ?? []).map((item: any) => {
       syncRelatedEntity(item);
       return mapApplication(item);
     });
@@ -66,57 +91,69 @@ export const collaborationService = {
     return items;
   },
   async getProjectApplications(projectId: string) {
-    const response = await apiRequest<any[]>(`/projects/${projectId}/applications`, {
-      auth: true,
-    });
+    const { data, error } = await supabaseAny
+      .from('applications')
+      .select(applicationSelect)
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: false });
 
-    const items = response.data.map((item) => {
+    throwIfSupabaseError(error);
+
+    const items = (data ?? []).map((item: any) => {
       syncRelatedEntity(item);
       return mapApplication(item);
     });
     cache.replaceApplications(items);
     return items;
   },
-  async updateApplicationStatus(
-    applicationId: string,
-    status: 'accepted' | 'rejected'
-  ) {
-    const application = db.applications.find((item) => item.id === applicationId);
-    if (!application) {
-      throw new Error('Application not found');
+  async updateApplicationStatus(applicationId: string, status: 'accepted' | 'rejected') {
+    if (status === 'accepted') {
+      const { error } = await supabaseAny.rpc('accept_application', {
+        p_application_id: applicationId,
+      });
+      throwIfSupabaseError(error);
+
+      const application = await getApplication(applicationId);
+      cache.syncApplications([application]);
+      return application;
     }
 
-    const response = await apiRequest<any>(
-      `/projects/${application.projectId}/applications/${applicationId}/${status === 'accepted' ? 'accept' : 'reject'}`,
-      {
-        method: 'PATCH',
-        auth: true,
-      }
-    );
+    const { data, error } = await supabaseAny
+      .from('applications')
+      .update({ status })
+      .eq('id', applicationId)
+      .select(applicationSelect)
+      .single();
 
-    syncRelatedEntity(response.data);
-    const updated = mapApplication(response.data);
-    cache.syncApplications([updated]);
-    return updated;
+    throwIfSupabaseError(error);
+    const application = mapApplication(data);
+    cache.syncApplications([application]);
+    return application;
   },
-  async inviteStudent(projectId: string, _senderId: string, studentId: string, message: string) {
-    const response = await apiRequest<any>(`/projects/${projectId}/invitations`, {
-      method: 'POST',
-      auth: true,
-      json: { invitedUser: studentId, message },
-    });
+  async inviteStudent(projectId: string, senderId: string, studentId: string, message: string) {
+    const { data, error } = await supabaseAny
+      .from('invitations')
+      .insert({ project_id: projectId, sender_id: senderId, student_id: studentId, message })
+      .select(invitationSelect)
+      .single();
 
-    syncRelatedEntity(response.data);
-    const invitation = mapInvitation(response.data);
+    throwIfSupabaseError(error);
+    syncRelatedEntity(data);
+
+    const invitation = mapInvitation(data);
     cache.syncInvitations([invitation]);
     return invitation;
   },
-  async getReceivedInvitations(_studentId: string) {
-    const response = await apiRequest<any[]>('/projects/invitations/received', {
-      auth: true,
-    });
+  async getReceivedInvitations(studentId: string) {
+    const { data, error } = await supabaseAny
+      .from('invitations')
+      .select(invitationSelect)
+      .eq('student_id', studentId)
+      .order('created_at', { ascending: false });
 
-    const items = response.data.map((item) => {
+    throwIfSupabaseError(error);
+
+    const items = (data ?? []).map((item: any) => {
       syncRelatedEntity(item);
       return mapInvitation(item);
     });
@@ -124,32 +161,18 @@ export const collaborationService = {
     return items;
   },
   async getSentInvitations(senderId: string) {
-    const projects = await apiRequest<any[]>('/projects/mine', {
-      auth: true,
+    const { data, error } = await supabaseAny
+      .from('invitations')
+      .select(invitationSelect)
+      .eq('sender_id', senderId)
+      .order('created_at', { ascending: false });
+
+    throwIfSupabaseError(error);
+
+    const items = (data ?? []).map((item: any) => {
+      syncRelatedEntity(item);
+      return mapInvitation(item);
     });
-
-    const sent = await Promise.all(
-      projects.data
-        .map((project) => extractProjectId(project))
-        .filter(Boolean)
-        .map((projectId) =>
-          apiRequest<any[]>(`/projects/${projectId}/invitations`, {
-            auth: true,
-          })
-        )
-    );
-
-    const items = sent
-      .flatMap((result) => result.data)
-      .map((item) => {
-        syncRelatedEntity(item);
-        const invitation = mapInvitation(item);
-        return {
-          ...invitation,
-          senderId,
-        };
-      });
-
     cache.replaceInvitations(items);
     return items;
   },
@@ -157,37 +180,46 @@ export const collaborationService = {
     invitationId: string,
     status: 'accepted' | 'declined' | 'cancelled'
   ) {
-    const invitation = db.invitations.find((item) => item.id === invitationId);
-    if (!invitation) {
-      throw new Error('Invitation not found');
+    if (status === 'accepted') {
+      const { data: membership, error: membershipError } = await supabaseAny.rpc(
+        'accept_invitation',
+        { p_invitation_id: invitationId }
+      );
+
+      throwIfSupabaseError(membershipError);
+      cache.syncMemberships([mapMembership(membership)]);
+
+      const updated = await getInvitation(invitationId);
+      cache.syncInvitations([updated]);
+      return updated;
     }
 
-    const path =
-      status === 'accepted'
-        ? `/projects/invitations/${invitationId}/accept`
-        : status === 'declined'
-          ? `/projects/invitations/${invitationId}/decline`
-          : `/projects/${invitation.projectId}/invitations/${invitationId}/cancel`;
+    const { data, error } = await supabaseAny
+      .from('invitations')
+      .update({ status })
+      .eq('id', invitationId)
+      .select(invitationSelect)
+      .single();
 
-    const response = await apiRequest<any>(path, {
-      method: status === 'cancelled' ? 'DELETE' : 'PATCH',
-      auth: true,
-    });
-
-    syncRelatedEntity(response.data);
-    const updated = mapInvitation(response.data ?? { ...invitation, status });
+    throwIfSupabaseError(error);
+    const updated = mapInvitation(data);
     cache.syncInvitations([updated]);
     return updated;
   },
   async getTeamMembers(projectId: string) {
-    const response = await apiRequest<any[]>(`/projects/${projectId}/members`, {
-      auth: true,
-    });
+    const { data, error } = await supabaseAny
+      .from('memberships')
+      .select(membershipSelect)
+      .eq('project_id', projectId)
+      .eq('status', 'active')
+      .order('joined_at', { ascending: true });
 
-    const items = response.data.map((item) => {
+    throwIfSupabaseError(error);
+
+    const items = (data ?? []).map((item: any) => {
       syncRelatedEntity(item);
       return mapMembership(item);
-    });
+    }) as ReturnType<typeof mapMembership>[];
     cache.replaceMemberships(items);
 
     const project = db.projects.find((item) => item.id === projectId);
@@ -204,54 +236,43 @@ export const collaborationService = {
     return items;
   },
   async updateMemberRole(membershipId: string, roleName: string) {
-    const membership = db.memberships.find((item) => item.id === membershipId);
-    if (!membership) {
-      throw new Error('Member not found');
-    }
+    const { data, error } = await supabaseAny
+      .from('memberships')
+      .update({ role_name: roleName })
+      .eq('id', membershipId)
+      .select(membershipSelect)
+      .single();
 
-    const response = await apiRequest<any>(`/projects/${membership.projectId}/members/assign-role`, {
-      method: 'PATCH',
-      auth: true,
-      json: {
-        memberUserId: membership.studentId,
-        roleName,
-      },
-    });
-
-    syncRelatedEntity(response.data);
-    const updated = mapMembership(response.data);
-    cache.syncMemberships([updated]);
-    return updated;
+    throwIfSupabaseError(error);
+    const membership = mapMembership(data);
+    cache.syncMemberships([membership]);
+    return membership;
   },
   async removeMember(membershipId: string) {
-    const membership = db.memberships.find((item) => item.id === membershipId);
-    if (!membership) {
-      throw new Error('Member not found');
-    }
+    const { data, error } = await supabaseAny
+      .from('memberships')
+      .update({ status: 'removed' })
+      .eq('id', membershipId)
+      .select(membershipSelect)
+      .single();
 
-    const response = await apiRequest<any>(`/projects/${membership.projectId}/members/remove`, {
-      method: 'DELETE',
-      auth: true,
-      json: {
-        memberUserId: membership.studentId,
-      },
-    });
-
-    const updated = mapMembership(response.data ?? { ...membership, status: 'removed' });
-    cache.syncMemberships([updated]);
-    return updated;
+    throwIfSupabaseError(error);
+    const membership = mapMembership(data);
+    cache.syncMemberships([membership]);
+    return membership;
   },
-  async leaveTeam(projectId: string, _studentId: string) {
-    const response = await apiRequest<any>(`/projects/${projectId}/members/leave`, {
-      method: 'DELETE',
-      auth: true,
-    });
+  async leaveTeam(projectId: string, studentId: string) {
+    const { data, error } = await supabaseAny
+      .from('memberships')
+      .update({ status: 'left' })
+      .eq('project_id', projectId)
+      .eq('student_id', studentId)
+      .select(membershipSelect)
+      .single();
 
-    const updated = mapMembership(response.data);
-    cache.syncMemberships([updated]);
-    return updated;
+    throwIfSupabaseError(error);
+    const membership = mapMembership(data);
+    cache.syncMemberships([membership]);
+    return membership;
   },
 };
-
-const extractProjectId = (project: any) =>
-  typeof project === 'string' ? project : project?._id ?? project?.id ?? '';

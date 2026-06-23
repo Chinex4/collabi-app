@@ -3,22 +3,16 @@
     "name": "Collabi",
     "slug": "collabi",
     "version": "1.0.0",
-
     "web": {
       "favicon": "./assets/favicon.png"
     },
-
     "experiments": {
       "tsconfigPaths": true
     },
-
-    "plugins": [],
-
+    "plugins": ["@react-native-community/datetimepicker", "expo-status-bar"],
     "orientation": "portrait",
     "icon": "./assets/logo.png",
-
     "userInterfaceStyle": "automatic",
-
     "splash": {
       "image": "./assets/logo.png",
       "resizeMode": "contain",

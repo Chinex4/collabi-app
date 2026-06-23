@@ -1,10 +1,8 @@
 import { cache } from '@/data/cache';
 import { db } from '@/data/mockDb';
-import { ProjectStatus } from '@/types';
+import { AnalyticsMetrics, ProjectStatus } from '@/types';
 
-import { apiRequest } from '../http';
 import {
-  mapAnalytics,
   mapAnnouncement,
   mapAuditLog,
   mapProfile,
@@ -13,195 +11,324 @@ import {
   mapSetting,
   mapUser,
 } from '../mappers';
+import { supabase } from '../supabase';
+import { throwIfSupabaseError } from '../errors';
+
+const supabaseAny = supabase as any;
+
+const projectSelect = `
+  *,
+  owner:users(*),
+  category:categories(*),
+  faculty:faculties(*),
+  department:departments(*),
+  required_skills:project_required_skills(skill:skills(*)),
+  optional_skills:project_optional_skills(skill:skills(*)),
+  bookmarks:project_bookmarks(user_id),
+  memberships(*)
+`;
+
+const emptyAnalytics: AnalyticsMetrics = {
+  totalUsers: 0,
+  activeUsers: 0,
+  totalProjects: 0,
+  openProjects: 0,
+  completedProjects: 0,
+  teamFormationActivity: 0,
+  taskActivity: 0,
+  reportsOverview: 0,
+};
+
+const getCount = async (table: string, filter?: (query: any) => any) => {
+  let query = supabaseAny.from(table).select('id', { count: 'exact', head: true });
+  if (filter) {
+    query = filter(query);
+  }
+  const { count, error } = await query;
+  throwIfSupabaseError(error);
+  return count ?? 0;
+};
+
+const buildAnalytics = async (): Promise<AnalyticsMetrics> => {
+  const [
+    totalUsers,
+    activeUsers,
+    totalProjects,
+    openProjects,
+    completedProjects,
+    teamFormationActivity,
+    taskActivity,
+    reportsOverview,
+  ] = await Promise.all([
+    getCount('users'),
+    getCount('users', (query) => query.eq('status', 'active')),
+    getCount('projects'),
+    getCount('projects', (query) => query.eq('status', 'open')),
+    getCount('projects', (query) => query.eq('status', 'completed')),
+    getCount('memberships', (query) => query.eq('status', 'active')),
+    getCount('tasks'),
+    getCount('reports', (query) => query.eq('status', 'pending')),
+  ]);
+
+  return {
+    totalUsers,
+    activeUsers,
+    totalProjects,
+    openProjects,
+    completedProjects,
+    teamFormationActivity,
+    taskActivity,
+    reportsOverview,
+  };
+};
 
 export const adminService = {
   async getDashboard() {
-    const [dashboard, reports] = await Promise.all([
-      apiRequest<any>('/admin/dashboard', { auth: true }),
-      apiRequest<any[]>('/admin/reports', { auth: true, query: { page: 1, limit: 5 } }),
+    const [analytics, reports, announcements] = await Promise.all([
+      this.getAnalytics(),
+      this.getReports(),
+      this.getAnnouncements(),
     ]);
 
-    const analytics = mapAnalytics(dashboard.data);
-    const recentReports = reports.data.map(mapReport);
-    cache.replaceAnalytics(analytics);
+    const recentReports = reports.slice(0, 5);
     cache.replaceReports(recentReports);
 
     return {
       analytics,
       recentReports,
-      announcements: db.announcements,
+      announcements,
     };
   },
   async getAnalytics() {
-    const response = await apiRequest<any>('/admin/analytics', {
-      auth: true,
-    });
-    const analytics = mapAnalytics(response.data);
+    const analytics = await buildAnalytics().catch(() => emptyAnalytics);
     cache.replaceAnalytics(analytics);
     return analytics;
   },
   async getUsers(search = '') {
-    const response = await apiRequest<any[]>('/admin/users', {
-      auth: true,
-      query: { search },
-    });
-    const items = response.data.map(mapUser);
+    let query = supabaseAny
+      .from('users')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(100);
+    if (search) {
+      query = query.or(`full_name.ilike.%${search}%,email.ilike.%${search}%`);
+    }
+
+    const { data, error } = await query;
+    throwIfSupabaseError(error);
+
+    const items = (data ?? []).map(mapUser);
     cache.syncUsers(items);
     return items;
   },
   async getUserDetail(userId: string) {
-    const [userResponse, activityResponse] = await Promise.all([
-      apiRequest<any>(`/admin/users/${userId}`, { auth: true }),
-      apiRequest<any>(`/admin/users/${userId}/activity`, { auth: true }),
+    const [userResult, profileResult, ownedProjects, memberships] = await Promise.all([
+      supabaseAny.from('users').select('*').eq('id', userId).single(),
+      supabaseAny.from('student_profiles').select('*').eq('user_id', userId).maybeSingle(),
+      supabaseAny.from('projects').select(projectSelect).eq('owner_id', userId),
+      supabaseAny.from('memberships').select('project:projects(*)').eq('student_id', userId),
     ]);
 
-    const user = mapUser(userResponse.data);
+    throwIfSupabaseError(userResult.error);
+    throwIfSupabaseError(profileResult.error);
+    throwIfSupabaseError(ownedProjects.error);
+    throwIfSupabaseError(memberships.error);
+
+    const user = mapUser(userResult.data);
+    const profile = profileResult.data ? mapProfile(profileResult.data) : undefined;
+    const projects = [
+      ...((ownedProjects.data ?? []) as any[]),
+      ...((memberships.data ?? []) as any[]).map((item) => item.project).filter(Boolean),
+    ].map((item) => mapProject(item));
+
     cache.syncUsers([user]);
-    const profile = activityResponse.data.profile ? mapProfile(activityResponse.data.profile) : undefined;
     if (profile) {
       cache.syncProfiles([profile]);
     }
+    cache.syncProjects(projects);
 
     return {
       user,
       profile: profile ?? db.profiles.find((item) => item.userId === userId),
-      projects: db.projects.filter(
-        (project) => project.ownerId === userId || project.teamMemberIds.includes(userId)
-      ),
-      activity: activityResponse.data,
+      projects,
+      activity: {
+        projectCount: projects.length,
+      },
     };
   },
   async setUserSuspension(userId: string, suspended: boolean, _actorId: string) {
-    const response = await apiRequest<any>(
-      `/admin/users/${userId}/${suspended ? 'suspend' : 'unsuspend'}`,
-      {
-        method: 'PATCH',
-        auth: true,
-      }
-    );
+    const { data, error } = await supabaseAny
+      .from('users')
+      .update({ status: suspended ? 'suspended' : 'active' })
+      .eq('id', userId)
+      .select('*')
+      .single();
 
-    const user = mapUser(response.data);
+    throwIfSupabaseError(error);
+    const user = mapUser(data);
     cache.syncUsers([user]);
     return user;
   },
   async verifyUser(userId: string, _actorId: string) {
-    const response = await apiRequest<any>(`/admin/users/${userId}/verify`, {
-      method: 'PATCH',
-      auth: true,
-    });
+    const { data, error } = await supabaseAny
+      .from('users')
+      .update({ is_verified: true })
+      .eq('id', userId)
+      .select('*')
+      .single();
 
-    const user = mapUser(response.data);
+    throwIfSupabaseError(error);
+    const user = mapUser(data);
     cache.syncUsers([user]);
     return user;
   },
   async deleteUser(userId: string, _actorId: string) {
-    const response = await apiRequest<any>(`/admin/users/${userId}`, {
-      method: 'DELETE',
-      auth: true,
-    });
+    const { data, error } = await supabaseAny
+      .from('users')
+      .update({ status: 'deleted' })
+      .eq('id', userId)
+      .select('*')
+      .single();
 
-    const user = mapUser(response.data);
+    throwIfSupabaseError(error);
+    const user = mapUser(data);
     cache.syncUsers([user]);
     return user;
   },
   async getProjects(search = '') {
-    const response = await apiRequest<any[]>('/admin/projects', {
-      auth: true,
-      query: { search },
-    });
-    const items = response.data.map((item) => mapProject(item));
+    let query = supabaseAny
+      .from('projects')
+      .select(projectSelect)
+      .order('created_at', { ascending: false })
+      .limit(100);
+    if (search) {
+      query = query.ilike('title', `%${search}%`);
+    }
+
+    const { data, error } = await query;
+    throwIfSupabaseError(error);
+
+    const items = (data ?? []).map(mapProject);
     cache.syncProjects(items);
     return items;
   },
   async getProjectDetail(projectId: string) {
-    const [projectResponse, reportsResponse] = await Promise.all([
-      apiRequest<any>(`/admin/projects/${projectId}`, { auth: true }),
-      apiRequest<any[]>(`/admin/reports`, {
-        auth: true,
-        query: { targetType: 'project' },
-      }),
+    const [projectResult, applications, reports] = await Promise.all([
+      supabaseAny.from('projects').select(projectSelect).eq('id', projectId).single(),
+      supabaseAny.from('applications').select('*').eq('project_id', projectId),
+      supabaseAny
+        .from('reports')
+        .select('*')
+        .eq('target_type', 'project')
+        .eq('target_id', projectId),
     ]);
 
-    const project = mapProject(projectResponse.data);
+    throwIfSupabaseError(projectResult.error);
+    throwIfSupabaseError(applications.error);
+    throwIfSupabaseError(reports.error);
+
+    const project = mapProject(projectResult.data);
     cache.syncProjects([project]);
 
     return {
       project,
-      applications: db.applications.filter((item) => item.projectId === projectId),
-      reports: reportsResponse.data.map(mapReport).filter((item) => item.targetId === projectId),
+      applications: (applications.data ?? []).map((item: any) => ({
+        id: item.id,
+        projectId: item.project_id,
+        studentId: item.student_id,
+        message: item.message ?? '',
+        status: item.status,
+        createdAt: item.created_at,
+      })),
+      reports: (reports.data ?? []).map(mapReport),
     };
   },
   async removeProject(projectId: string, _actorId: string) {
-    await apiRequest(`/admin/projects/${projectId}`, {
-      method: 'DELETE',
-      auth: true,
-    });
+    const { error } = await supabaseAny.from('projects').delete().eq('id', projectId);
+    throwIfSupabaseError(error);
 
     cache.replaceProjects(db.projects.filter((item) => item.id !== projectId));
     return { success: true };
   },
   async changeProjectStatus(projectId: string, status: ProjectStatus, _actorId: string) {
-    const response = await apiRequest<any>(`/admin/projects/${projectId}/status`, {
-      method: 'PATCH',
-      auth: true,
-      json: { status },
-    });
+    const { data, error } = await supabaseAny
+      .from('projects')
+      .update({ status })
+      .eq('id', projectId)
+      .select(projectSelect)
+      .single();
 
-    const project = mapProject(response.data);
+    throwIfSupabaseError(error);
+    const project = mapProject(data);
     cache.syncProjects([project]);
     return project;
   },
   async getReports() {
-    const response = await apiRequest<any[]>('/admin/reports', {
-      auth: true,
-    });
-    const items = response.data.map(mapReport);
+    const { data, error } = await supabaseAny
+      .from('reports')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(100);
+
+    throwIfSupabaseError(error);
+    const items = (data ?? []).map(mapReport);
     cache.replaceReports(items);
     return items;
   },
   async getReportDetail(reportId: string) {
-    const response = await apiRequest<any>(`/admin/reports/${reportId}`, {
-      auth: true,
-    });
-    const report = mapReport(response.data);
+    const { data, error } = await supabaseAny
+      .from('reports')
+      .select('*')
+      .eq('id', reportId)
+      .single();
+
+    throwIfSupabaseError(error);
+    const report = mapReport(data);
     cache.syncReports([report]);
     return report;
   },
   async updateReportStatus(
     reportId: string,
     status: 'resolved' | 'dismissed' | 'reviewed',
-    _actorId: string
+    actorId: string
   ) {
-    const actionPath =
-      status === 'resolved'
-        ? `/admin/reports/${reportId}/resolve`
-        : status === 'dismissed'
-          ? `/admin/reports/${reportId}/dismiss`
-          : `/admin/reports/${reportId}/action`;
+    const { data, error } = await supabaseAny
+      .from('reports')
+      .update({
+        status,
+        reviewed_by: actorId,
+        reviewed_at: new Date().toISOString(),
+      })
+      .eq('id', reportId)
+      .select('*')
+      .single();
 
-    const response = await apiRequest<any>(actionPath, {
-      method: 'PATCH',
-      auth: true,
-      json: status === 'reviewed' ? { action: 'remove_message', resolutionNote: 'Reviewed' } : {},
-    });
-
-    const report = mapReport(response.data);
+    throwIfSupabaseError(error);
+    const report = mapReport(data);
     cache.syncReports([report]);
     return report;
   },
   async getAuditLogs() {
-    const response = await apiRequest<any[]>('/admin/audit-logs', {
-      auth: true,
-    });
-    const items = response.data.map(mapAuditLog);
+    const { data, error } = await supabaseAny
+      .from('audit_logs')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(100);
+
+    throwIfSupabaseError(error);
+    const items = (data ?? []).map(mapAuditLog);
     cache.replaceAuditLogs(items);
     return items;
   },
   async getSettings() {
-    const response = await apiRequest<any[]>('/admin/settings', {
-      auth: true,
-    });
-    const items = response.data.map(mapSetting);
+    const { data, error } = await supabaseAny
+      .from('settings')
+      .select('*')
+      .order('category', { ascending: true })
+      .order('label', { ascending: true });
+
+    throwIfSupabaseError(error);
+    const items = (data ?? []).map(mapSetting);
     cache.replaceSettings(items);
     return items;
   },
@@ -216,18 +343,22 @@ export const adminService = {
       category: string;
     }
   ) {
-    const response = await apiRequest<any>('/admin/settings', {
-      method: 'POST',
-      auth: true,
-      json: {
-        key: payload.key ?? payload.label.toLowerCase().replace(/\s+/g, '_'),
-        value: payload.value,
-        description: payload.description,
-        isPublic: true,
-      },
-    });
+    const row = {
+      key: payload.key ?? payload.label.toLowerCase().replace(/\s+/g, '_'),
+      label: payload.label,
+      value: payload.value,
+      description: payload.description,
+      category: payload.category,
+    };
 
-    const setting = mapSetting(response.data);
+    const query = payload.id
+      ? supabaseAny.from('settings').update(row).eq('id', payload.id)
+      : supabaseAny.from('settings').insert(row);
+
+    const { data, error } = await query.select('*').single();
+    throwIfSupabaseError(error);
+
+    const setting = mapSetting(data);
     cache.replaceSettings(
       payload.id
         ? db.settings.map((item) => (item.id === payload.id ? setting : item))
@@ -236,38 +367,44 @@ export const adminService = {
     return setting;
   },
   async deleteSetting(settingId: string, _actorId: string) {
-    await apiRequest(`/admin/settings/${settingId}`, {
-      method: 'DELETE',
-      auth: true,
-    });
+    const { error } = await supabaseAny.from('settings').delete().eq('id', settingId);
+    throwIfSupabaseError(error);
 
     cache.replaceSettings(db.settings.filter((item) => item.id !== settingId));
     return { success: true };
   },
   async getAnnouncements() {
-    return db.announcements;
+    const { data, error } = await supabaseAny
+      .from('announcements')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(100);
+
+    throwIfSupabaseError(error);
+    const items = (data ?? []).map(mapAnnouncement);
+    cache.replaceAnnouncements(items);
+    return items;
   },
   async sendAnnouncement(
-    _actorId: string,
+    actorId: string,
     payload: { title: string; body: string; audience: 'all' | 'students' | 'admins' }
   ) {
-    const response = await apiRequest<any>('/admin/announcements', {
-      method: 'POST',
-      auth: true,
-      json: {
+    const { data, error } = await supabaseAny
+      .from('announcements')
+      .insert({
         title: payload.title,
-        message: payload.body,
-      },
-    });
+        body: payload.body,
+        audience: payload.audience,
+        created_by: actorId,
+        is_sent: true,
+        sent_at: new Date().toISOString(),
+      })
+      .select('*')
+      .single();
 
-    const announcement = mapAnnouncement({
-      id: `${Date.now()}`,
-      title: payload.title,
-      body: payload.body,
-      audience: payload.audience,
-      createdAt: new Date().toISOString(),
-    });
+    throwIfSupabaseError(error);
+    const announcement = mapAnnouncement(data);
     cache.replaceAnnouncements([announcement, ...db.announcements]);
-    return response.data ?? announcement;
+    return announcement;
   },
 };

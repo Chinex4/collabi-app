@@ -11,154 +11,180 @@ import { projectService } from '@/api/services/projectService';
 import { reportService } from '@/api/services/reportService';
 import { taskService } from '@/api/services/taskService';
 import { QUERY_KEYS } from '@/constants';
+import {
+  AnalyticsMetrics,
+  Announcement,
+  Application,
+  AuditLog,
+  Conversation,
+  Invitation,
+  LookupBundle,
+  Membership,
+  Message,
+  Notification,
+  PaginatedResult,
+  Project,
+  Report,
+  Setting,
+  StudentProfile,
+  Task,
+  User,
+} from '@/types';
+
+type ProfileResult = { user: User; profile: StudentProfile };
+type AdminDashboardResult = {
+  analytics: AnalyticsMetrics;
+  recentReports: Report[];
+  announcements: Announcement[];
+};
 
 export const useLookups = () =>
-  useQuery({ queryKey: QUERY_KEYS.lookups, queryFn: lookupService.getLookupBundle });
+  useQuery<LookupBundle>({ queryKey: QUERY_KEYS.lookups, queryFn: lookupService.getLookupBundle });
 
 export const useProjects = (
   filters: Parameters<typeof projectService.getProjects>[0],
   currentUserId?: string
 ) =>
-  useQuery({
+  useQuery<PaginatedResult<Project>>({
     queryKey: [...QUERY_KEYS.projects, filters, currentUserId],
     queryFn: () => projectService.getProjects(filters, currentUserId),
   });
 
 export const useProjectDetail = (projectId: string) =>
-  useQuery({
+  useQuery<Project>({
     queryKey: [...QUERY_KEYS.projects, projectId],
     queryFn: () => projectService.getProjectById(projectId),
     enabled: Boolean(projectId),
   });
 
 export const useProfiles = (filters = {}) =>
-  useQuery({
+  useQuery<ProfileResult[]>({
     queryKey: [...QUERY_KEYS.profiles, filters],
     queryFn: () => profileService.getProfiles(filters),
   });
 
 export const useProfile = (userId?: string) =>
-  useQuery({
+  useQuery<{ user: User | null; profile: StudentProfile }>({
     queryKey: [...QUERY_KEYS.profiles, userId],
     queryFn: () => profileService.getProfile(userId!),
     enabled: Boolean(userId),
   });
 
 export const useNotifications = (userId?: string) =>
-  useQuery({
+  useQuery<Notification[]>({
     queryKey: [...QUERY_KEYS.notifications, userId],
     queryFn: () => notificationService.getNotifications(userId!),
     enabled: Boolean(userId),
   });
 
 export const useInbox = (userId?: string) =>
-  useQuery({
+  useQuery<Conversation[]>({
     queryKey: [...QUERY_KEYS.conversations, userId],
     queryFn: () => chatService.getInbox(userId!),
     enabled: Boolean(userId),
   });
 
 export const useMessages = (conversationId?: string) =>
-  useQuery({
+  useQuery<Message[]>({
     queryKey: [...QUERY_KEYS.messages, conversationId],
     queryFn: () => chatService.getMessages(conversationId!),
     enabled: Boolean(conversationId),
   });
 
 export const useMyTasks = (userId?: string) =>
-  useQuery({
+  useQuery<Task[]>({
     queryKey: [...QUERY_KEYS.tasks, 'mine', userId],
     queryFn: () => taskService.getMyTasks(userId!),
     enabled: Boolean(userId),
   });
 
 export const useProjectTasks = (projectId?: string) =>
-  useQuery({
+  useQuery<Task[]>({
     queryKey: [...QUERY_KEYS.tasks, projectId],
     queryFn: () => taskService.getProjectTasks(projectId!),
     enabled: Boolean(projectId),
   });
 
 export const useMyApplications = (userId?: string) =>
-  useQuery({
+  useQuery<Application[]>({
     queryKey: [...QUERY_KEYS.applications, userId],
     queryFn: () => collaborationService.getMyApplications(userId!),
     enabled: Boolean(userId),
   });
 
 export const useReceivedInvitations = (userId?: string) =>
-  useQuery({
+  useQuery<Invitation[]>({
     queryKey: [...QUERY_KEYS.invitations, 'received', userId],
     queryFn: () => collaborationService.getReceivedInvitations(userId!),
     enabled: Boolean(userId),
   });
 
 export const useSentInvitations = (userId?: string) =>
-  useQuery({
+  useQuery<Invitation[]>({
     queryKey: [...QUERY_KEYS.invitations, 'sent', userId],
     queryFn: () => collaborationService.getSentInvitations(userId!),
     enabled: Boolean(userId),
   });
 
 export const useProjectApplications = (projectId?: string) =>
-  useQuery({
+  useQuery<Application[]>({
     queryKey: [...QUERY_KEYS.applications, projectId],
     queryFn: () => collaborationService.getProjectApplications(projectId!),
     enabled: Boolean(projectId),
   });
 
 export const useTeamMembers = (projectId?: string) =>
-  useQuery({
+  useQuery<Membership[]>({
     queryKey: [...QUERY_KEYS.memberships, projectId],
     queryFn: () => collaborationService.getTeamMembers(projectId!),
     enabled: Boolean(projectId),
   });
 
 export const useMyReports = (userId?: string) =>
-  useQuery({
+  useQuery<Report[]>({
     queryKey: [...QUERY_KEYS.reports, userId],
     queryFn: () => reportService.getMyReports(userId!),
     enabled: Boolean(userId),
   });
 
 export const useAdminDashboard = () =>
-  useQuery({
+  useQuery<AdminDashboardResult>({
     queryKey: QUERY_KEYS.adminDashboard,
     queryFn: adminService.getDashboard,
   });
 
 export const useAdminUsers = (search = '') =>
-  useQuery({
+  useQuery<User[]>({
     queryKey: [...QUERY_KEYS.adminUsers, search],
     queryFn: () => adminService.getUsers(search),
   });
 
 export const useAdminProjects = (search = '') =>
-  useQuery({
+  useQuery<Project[]>({
     queryKey: [...QUERY_KEYS.adminProjects, search],
     queryFn: () => adminService.getProjects(search),
   });
 
 export const useAdminReports = () =>
-  useQuery({
+  useQuery<Report[]>({
     queryKey: QUERY_KEYS.adminReports,
     queryFn: adminService.getReports,
   });
 
 export const useAdminSettings = () =>
-  useQuery({
+  useQuery<Setting[]>({
     queryKey: QUERY_KEYS.settings,
     queryFn: adminService.getSettings,
   });
 
 export const useAdminAnnouncements = () =>
-  useQuery({
+  useQuery<Announcement[]>({
     queryKey: QUERY_KEYS.announcements,
     queryFn: adminService.getAnnouncements,
   });
 
 export const useAdminAuditLogs = () =>
-  useQuery({
+  useQuery<AuditLog[]>({
     queryKey: QUERY_KEYS.auditLogs,
     queryFn: adminService.getAuditLogs,
   });

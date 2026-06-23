@@ -2,8 +2,23 @@ import { cache } from '@/data/cache';
 import { db } from '@/data/mockDb';
 import { PaginatedResult, Project, ProjectFilterInput, ProjectStatus } from '@/types';
 
-import { apiRequest } from '../http';
+import { requireData, throwIfSupabaseError } from '../errors';
 import { mapCategory, mapDepartment, mapFaculty, mapProject, mapSkill, mapUser } from '../mappers';
+import { supabase } from '../supabase';
+
+const supabaseAny = supabase as any;
+
+const projectSelect = `
+  *,
+  owner:users(*),
+  category:categories(*),
+  faculty:faculties(*),
+  department:departments(*),
+  required_skills:project_required_skills(skill:skills(*)),
+  optional_skills:project_optional_skills(skill:skills(*)),
+  bookmarks:project_bookmarks(user_id),
+  memberships(*)
+`;
 
 const syncProjectDependencies = (raw: any) => {
   if (raw.owner && typeof raw.owner === 'object') {
@@ -18,73 +33,99 @@ const syncProjectDependencies = (raw: any) => {
   if (raw.department && typeof raw.department === 'object') {
     cache.replaceLookups({ departments: [mapDepartment(raw.department)] });
   }
-  raw.requiredSkills?.forEach((skill: any) => {
-    if (skill && typeof skill === 'object') {
-      cache.replaceLookups({ skills: [mapSkill(skill)] });
+  (raw.required_skills ?? []).forEach((entry: any) => {
+    if (entry.skill && typeof entry.skill === 'object') {
+      cache.replaceLookups({ skills: [mapSkill(entry.skill)] });
     }
   });
-  raw.optionalSkills?.forEach((skill: any) => {
-    if (skill && typeof skill === 'object') {
-      cache.replaceLookups({ skills: [mapSkill(skill)] });
+  (raw.optional_skills ?? []).forEach((entry: any) => {
+    if (entry.skill && typeof entry.skill === 'object') {
+      cache.replaceLookups({ skills: [mapSkill(entry.skill)] });
     }
   });
-};
-
-const preserveProjectState = (project: Project, currentUserId?: string) => {
-  const existing = db.projects.find((item) => item.id === project.id);
-  return {
-    ...project,
-    teamMemberIds: existing?.teamMemberIds?.length ? existing.teamMemberIds : project.teamMemberIds,
-    bookmarkedBy:
-      existing?.bookmarkedBy?.length || currentUserId
-        ? Array.from(new Set([...(existing?.bookmarkedBy ?? []), ...(project.bookmarkedBy ?? [])]))
-        : [],
-  };
 };
 
 const mapProjectList = (items: any[], currentUserId?: string) =>
   items.map((item) => {
     syncProjectDependencies(item);
-    return preserveProjectState(mapProject(item, currentUserId), currentUserId);
+    return mapProject(item, currentUserId);
   });
 
 export const projectService = {
-  async getProjects(filters: ProjectFilterInput = {}, currentUserId?: string): Promise<PaginatedResult<Project>> {
-    const response = await apiRequest<any[]>('/projects', {
-      auth: Boolean(currentUserId),
-      query: {
-        page: filters.page,
-        limit: filters.pageSize,
-        search: filters.search,
-        category: filters.categoryId,
-        department: filters.departmentId,
-        requiredSkill: filters.skillIds?.[0],
-        status: filters.status,
-        visibility: filters.visibility,
-        sort:
-          filters.sortBy === 'latest'
-            ? 'recent'
-            : filters.sortBy === 'team_size'
-              ? 'relevance'
-              : filters.sortBy,
-      },
+  async getProjects(
+    filters: ProjectFilterInput = {},
+    currentUserId?: string
+  ): Promise<PaginatedResult<Project>> {
+    const page = filters.page ?? 1;
+    const pageSize = filters.pageSize ?? 20;
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize - 1;
+
+    let query = supabase.from('projects').select(projectSelect, { count: 'exact' }).range(from, to);
+
+    if (filters.search) {
+      query = query.ilike('title', `%${filters.search}%`);
+    }
+    if (filters.categoryId) {
+      query = query.eq('category_id', filters.categoryId);
+    }
+    if (filters.departmentId) {
+      query = query.eq('department_id', filters.departmentId);
+    }
+    if (filters.facultyId) {
+      query = query.eq('faculty_id', filters.facultyId);
+    }
+    if (filters.status) {
+      query = query.eq('status', filters.status);
+    }
+    if (filters.visibility) {
+      query = query.eq('visibility', filters.visibility);
+    }
+
+    if (filters.sortBy === 'deadline') {
+      query = query.order('deadline', { ascending: true });
+    } else if (filters.sortBy === 'team_size') {
+      query = query.order('max_team_size', { ascending: false });
+    } else {
+      query = query.order('created_at', { ascending: false });
+    }
+
+    const { data, error, count } = await query;
+    throwIfSupabaseError(error);
+
+    const items = mapProjectList(data ?? [], currentUserId).filter((project) => {
+      if (
+        filters.skillIds?.length &&
+        !filters.skillIds.some(
+          (skillId) =>
+            project.requiredSkillIds.includes(skillId) || project.optionalSkillIds.includes(skillId)
+        )
+      ) {
+        return false;
+      }
+      return true;
     });
 
-    const items = mapProjectList(response.data, currentUserId);
     cache.syncProjects(items);
 
-    const meta = (response.meta as any) ?? {};
     return {
       items,
-      total: meta.total ?? items.length,
-      page: meta.page ?? filters.page ?? 1,
-      pageSize: meta.limit ?? filters.pageSize ?? items.length,
+      total: count ?? items.length,
+      page,
+      pageSize,
     };
   },
   async getProjectById(projectId: string) {
-    const response = await apiRequest<any>(`/projects/${projectId}`);
-    syncProjectDependencies(response.data);
-    const project = preserveProjectState(mapProject(response.data));
+    const { data, error } = await supabase
+      .from('projects')
+      .select(projectSelect)
+      .eq('id', projectId)
+      .single();
+
+    throwIfSupabaseError(error);
+    syncProjectDependencies(requireData(data));
+
+    const project = mapProject(data);
     cache.syncProjects([project]);
     return project;
   },
@@ -104,107 +145,119 @@ export const projectService = {
       attachments?: Project['attachments'];
     }
   ) {
-    const response = await apiRequest<any>('/projects', {
-      method: 'POST',
-      auth: true,
-      json: {
-        title: payload.title,
-        description: payload.description,
-        category: payload.categoryId,
-        department: payload.departmentId,
-        faculty: payload.facultyId,
-        requiredSkills: payload.requiredSkillIds,
-        optionalSkills: payload.optionalSkillIds,
-        maxTeamSize: payload.teamSizeLimit,
-        deadline: payload.deadline,
-        visibility: payload.visibility,
-        tags: payload.tags,
-      },
+    const { data, error } = await supabaseAny.rpc('create_project_with_skills', {
+      p_title: payload.title,
+      p_description: payload.description,
+      p_category_id: payload.categoryId,
+      p_department_id: payload.departmentId,
+      p_faculty_id: payload.facultyId,
+      p_required_skill_ids: payload.requiredSkillIds,
+      p_optional_skill_ids: payload.optionalSkillIds,
+      p_max_team_size: payload.teamSizeLimit,
+      p_deadline: payload.deadline,
+      p_visibility: payload.visibility,
+      p_tags: payload.tags,
     });
 
-    syncProjectDependencies(response.data);
-    const project = preserveProjectState(mapProject(response.data));
-    cache.syncProjects([project]);
-    return project;
+    throwIfSupabaseError(error);
+    return this.getProjectById(requireData(data, 'Project was not created'));
   },
   async updateProject(projectId: string, payload: Partial<Project>) {
-    const response = await apiRequest<any>(`/projects/${projectId}`, {
-      method: 'PATCH',
-      auth: true,
-      json: {
+    const { error } = await supabaseAny
+      .from('projects')
+      .update({
         title: payload.title,
         description: payload.description,
-        category: payload.categoryId,
-        department: payload.departmentId,
-        faculty: payload.facultyId,
-        requiredSkills: payload.requiredSkillIds,
-        optionalSkills: payload.optionalSkillIds,
-        maxTeamSize: payload.teamSizeLimit,
+        category_id: payload.categoryId,
+        department_id: payload.departmentId,
+        faculty_id: payload.facultyId,
+        max_team_size: payload.teamSizeLimit,
         deadline: payload.deadline,
         status: payload.status,
         visibility: payload.visibility,
         tags: payload.tags,
-      },
-    });
+      })
+      .eq('id', projectId);
 
-    syncProjectDependencies(response.data);
-    const project = preserveProjectState(mapProject(response.data));
-    cache.syncProjects([project]);
-    return project;
+    throwIfSupabaseError(error);
+    return this.getProjectById(projectId);
   },
   async deleteProject(projectId: string) {
-    const response = await apiRequest(`/projects/${projectId}`, {
-      method: 'DELETE',
-      auth: true,
-    });
+    const { error } = await supabaseAny.from('projects').delete().eq('id', projectId);
+    throwIfSupabaseError(error);
 
     cache.replaceProjects(db.projects.filter((item) => item.id !== projectId));
-    return { message: response.message };
+    return { message: 'Project deleted' };
   },
   async changeProjectStatus(projectId: string, status: ProjectStatus) {
-    const response = await apiRequest<any>(`/projects/${projectId}/status`, {
-      method: 'PATCH',
-      auth: true,
-      json: { status },
-    });
+    const { error } = await supabaseAny.from('projects').update({ status }).eq('id', projectId);
+    throwIfSupabaseError(error);
 
-    const project = preserveProjectState(mapProject(response.data));
-    cache.syncProjects([project]);
-    return project;
+    return this.getProjectById(projectId);
   },
   async toggleBookmark(projectId: string, userId: string) {
-    const existing = db.projects.find((item) => item.id === projectId);
-    const isSaved = existing?.bookmarkedBy.includes(userId);
-    await apiRequest(`/projects/${projectId}/bookmark`, {
-      method: isSaved ? 'DELETE' : 'POST',
-      auth: true,
-    });
+    const { data: existing, error: readError } = await supabase
+      .from('project_bookmarks')
+      .select('project_id')
+      .eq('project_id', projectId)
+      .eq('user_id', userId)
+      .maybeSingle();
 
-    const nextBookmarkedBy = isSaved
-      ? (existing?.bookmarkedBy ?? []).filter((item) => item !== userId)
-      : Array.from(new Set([...(existing?.bookmarkedBy ?? []), userId]));
-    const updated = { ...(existing ?? { id: projectId }), bookmarkedBy: nextBookmarkedBy } as Project;
-    cache.syncProjects([updated]);
-    return updated;
+    throwIfSupabaseError(readError);
+
+    if (existing) {
+      const { error } = await supabaseAny
+        .from('project_bookmarks')
+        .delete()
+        .eq('project_id', projectId)
+        .eq('user_id', userId);
+      throwIfSupabaseError(error);
+    } else {
+      const { error } = await supabaseAny
+        .from('project_bookmarks')
+        .insert({ project_id: projectId, user_id: userId });
+      throwIfSupabaseError(error);
+    }
+
+    return this.getProjectById(projectId);
   },
-  async getMyProjects(_userId: string) {
-    const response = await apiRequest<any[]>('/projects/mine', {
-      auth: true,
-    });
+  async getMyProjects(userId: string) {
+    const { data, error } = await supabase
+      .from('projects')
+      .select(projectSelect)
+      .eq('owner_id', userId)
+      .order('created_at', { ascending: false });
 
-    const items = mapProjectList(response.data);
+    throwIfSupabaseError(error);
+
+    const items = mapProjectList(data ?? [], userId);
     cache.syncProjects(items);
     return items;
   },
   async getSavedProjects(userId: string) {
-    const response = await apiRequest<any[]>('/projects/saved', {
-      auth: true,
-    });
+    const { data: bookmarks, error: bookmarkError } = await supabase
+      .from('project_bookmarks')
+      .select('project_id')
+      .eq('user_id', userId);
 
-    const items = mapProjectList(response.data, userId).map((item) => ({
-      ...item,
-      bookmarkedBy: Array.from(new Set([...(item.bookmarkedBy ?? []), userId])),
-    }));
+    throwIfSupabaseError(bookmarkError);
+
+    const projectIds = ((bookmarks ?? []) as { project_id: string }[]).map(
+      (bookmark) => bookmark.project_id
+    );
+    if (!projectIds.length) {
+      return [];
+    }
+
+    const { data, error } = await supabase
+      .from('projects')
+      .select(projectSelect)
+      .in('id', projectIds)
+      .order('created_at', { ascending: false });
+
+    throwIfSupabaseError(error);
+
+    const items = mapProjectList(data ?? [], userId);
     cache.syncProjects(items);
     return items;
   },

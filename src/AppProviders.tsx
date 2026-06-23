@@ -6,6 +6,7 @@ import { View } from 'react-native';
 
 import { authService } from '@/api/services/authService';
 import { chatService } from '@/api/services/chatService';
+import { notificationService } from '@/api/services/notificationService';
 import { AppText } from '@/components/common';
 import { useAppDispatch, useAppSelector } from '@/hooks/useAppStore';
 import { store } from '@/store';
@@ -50,10 +51,12 @@ const Bootstrapper = ({ children }: { children: ReactNode }) => {
         dispatch(setCurrentUser(refreshed.user));
         await sessionStorage.setSession(refreshed.session);
         chatService.connect(refreshed.session.accessToken, queryClient);
+        notificationService.subscribe(refreshed.session.userId, queryClient);
       } catch {
         dispatch(clearAuth());
         await sessionStorage.setSession(null);
         chatService.disconnect();
+        notificationService.unsubscribe();
       } finally {
         dispatch(finishBootstrap());
       }
@@ -65,6 +68,7 @@ const Bootstrapper = ({ children }: { children: ReactNode }) => {
   useEffect(() => {
     return () => {
       chatService.disconnect();
+      notificationService.unsubscribe();
     };
   }, []);
 

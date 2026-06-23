@@ -1,26 +1,44 @@
 import { QueryClient } from '@tanstack/react-query';
-import { io, Socket } from 'socket.io-client';
+import { RealtimeChannel } from '@supabase/supabase-js';
 
 import { QUERY_KEYS } from '@/constants';
 import { cache } from '@/data/cache';
 import { db } from '@/data/mockDb';
 import { Conversation, FileResource, Message } from '@/types';
 
-import { SOCKET_BASE_URL, apiRequest } from '../http';
-import { mapConversation, mapMessage, mapNotification, mapProject, mapUser } from '../mappers';
+import { requireData, throwIfSupabaseError } from '../errors';
+import { mapConversation, mapMessage, mapProject, mapUser } from '../mappers';
+import { supabase } from '../supabase';
+import { notificationService } from './notificationService';
 
-type ChatEventPayload = {
-  conversation?: any;
-  message?: any;
-};
+const supabaseAny = supabase as any;
 
-const PROJECT_PLACEHOLDER_PREFIX = 'project:';
+const conversationSelect = `
+  *,
+  project:projects(*),
+  participants:conversation_participants(*, user:users(*)),
+  messages(*)
+`;
+const messageSelect = '*, sender:users(*), attachments:message_attachments(*)';
 
-let socket: Socket | null = null;
+let channels: RealtimeChannel[] = [];
 let client: QueryClient | null = null;
 
-const isProjectPlaceholder = (conversationId: string) =>
-  conversationId.startsWith(PROJECT_PLACEHOLDER_PREFIX);
+const removeChannels = () => {
+  channels.forEach((channel) => supabase.removeChannel(channel));
+  channels = [];
+};
+
+const sortConversations = (items: Conversation[]) =>
+  [...items].sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''));
+
+const dedupeMessages = (items: Message[]) => {
+  const map = new Map<string, Message>();
+  items.forEach((item) => {
+    map.set(item.id, item);
+  });
+  return [...map.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+};
 
 const updateMessagesCache = (conversationId: string, updater: (items: Message[]) => Message[]) => {
   const current = db.messages.filter((item) => item.conversationId === conversationId);
@@ -33,277 +51,231 @@ const updateMessagesCache = (conversationId: string, updater: (items: Message[])
   client?.setQueryData([...QUERY_KEYS.messages, conversationId], next);
 };
 
-const updateConversationsCache = (updater: (items: Conversation[]) => Conversation[]) => {
-  const next = updater(db.conversations);
-  cache.replaceConversations(next);
-  client?.setQueryData(
-    [...QUERY_KEYS.conversations, undefined],
-    next
-  );
+const syncConversationDependencies = (row: any) => {
+  if (row.project && typeof row.project === 'object') {
+    cache.syncProjects([mapProject(row.project)]);
+  }
+  row.participants?.forEach((participant: any) => {
+    if (participant.user && typeof participant.user === 'object') {
+      cache.syncUsers([mapUser(participant.user)]);
+    }
+  });
 };
 
-const sortConversations = (items: Conversation[]) =>
-  [...items].sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''));
-
-const syncConversationPayload = (payload: ChatEventPayload) => {
-  if (payload.conversation?.participants) {
-    payload.conversation.participants.forEach((participant: any) => {
-      if (participant && typeof participant === 'object') {
-        cache.syncUsers([mapUser(participant)]);
-      }
-    });
-  }
-  if (payload.conversation?.project && typeof payload.conversation.project === 'object') {
-    cache.syncProjects([mapProject(payload.conversation.project)]);
-  }
-  if (payload.message?.sender && typeof payload.message.sender === 'object') {
-    cache.syncUsers([mapUser(payload.message.sender)]);
-  }
+const syncConversation = (row: any) => {
+  syncConversationDependencies(row);
+  const conversation = mapConversation(row);
+  cache.syncConversations([conversation]);
+  return conversation;
 };
 
-const applyIncomingMessage = (payload: ChatEventPayload) => {
-  syncConversationPayload(payload);
-
-  if (!payload.conversation || !payload.message) {
-    return;
+const syncMessage = (row: any) => {
+  if (row.sender && typeof row.sender === 'object') {
+    cache.syncUsers([mapUser(row.sender)]);
   }
-
-  const conversation = mapConversation(payload.conversation);
-  const message = mapMessage(payload.message);
-  const mergedConversation = {
-    ...db.conversations.find((item) => item.id === conversation.id),
-    ...conversation,
-    lastMessageId: message.id,
-    updatedAt: message.createdAt,
-  };
-
-  cache.syncConversations([mergedConversation]);
+  const message = mapMessage(row);
   cache.syncMessages([message]);
-  client?.invalidateQueries({ queryKey: QUERY_KEYS.conversations });
-  client?.setQueryData([...QUERY_KEYS.messages, message.conversationId], (current: Message[] = []) =>
-    dedupeMessages([...current, message])
-  );
+  return message;
 };
 
-const dedupeMessages = (items: Message[]) => {
-  const map = new Map<string, Message>();
-  items.forEach((item) => {
-    map.set(item.id, item);
-  });
-  return [...map.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-};
-
-const bindSocket = () => {
-  if (!socket) {
+const subscribeToConversation = (conversationId: string) => {
+  if (channels.some((channel) => channel.topic === `realtime:conversation:${conversationId}`)) {
     return;
   }
 
-  socket.on('private_message', (payload: ChatEventPayload) => applyIncomingMessage(payload));
-  socket.on('project_message', (payload: ChatEventPayload) => applyIncomingMessage(payload));
-  socket.on('message_edited', (payload: any) => {
-    const updated = {
-      ...(db.messages.find((item) => item.id === payload._id) as Message | undefined),
-      id: payload._id,
-      body: payload.content,
-      editedAt: payload.isEdited ? new Date().toISOString() : undefined,
-    } as Message;
-    cache.syncMessages([updated]);
-    client?.invalidateQueries({ queryKey: QUERY_KEYS.messages });
-  });
-  socket.on('message_deleted', (payload: any) => {
-    const updated = {
-      ...(db.messages.find((item) => item.id === payload._id) as Message | undefined),
-      id: payload._id,
-      body: payload.content,
-      deletedAt: new Date().toISOString(),
-    } as Message;
-    cache.syncMessages([updated]);
-    client?.invalidateQueries({ queryKey: QUERY_KEYS.messages });
-  });
-  socket.on('messages_read', ({ conversationId, messageIds }: { conversationId: string; messageIds: string[] }) => {
-    updateMessagesCache(conversationId, (items) =>
-      items.map((item) =>
-        messageIds.includes(item.id)
-          ? { ...item, readBy: Array.from(new Set([...item.readBy, 'self'])) }
-          : item
-      )
-    );
-  });
-  socket.on('typing_start', (payload: any) => {
-    const conversation = resolveTypingConversation(payload);
-    if (!conversation || conversation.typingUserIds.includes(payload.userId)) {
-      return;
-    }
-    cache.syncConversations([
-      { ...conversation, typingUserIds: [...conversation.typingUserIds, payload.userId] },
-    ]);
-    client?.invalidateQueries({ queryKey: QUERY_KEYS.conversations });
-  });
-  socket.on('typing_stop', (payload: any) => {
-    const conversation = resolveTypingConversation(payload);
-    if (!conversation) {
-      return;
-    }
-    cache.syncConversations([
+  const channel = supabase
+    .channel(`conversation:${conversationId}`)
+    .on(
+      'postgres_changes',
       {
-        ...conversation,
-        typingUserIds: conversation.typingUserIds.filter((item) => item !== payload.userId),
+        event: '*',
+        schema: 'public',
+        table: 'messages',
+        filter: `conversation_id=eq.${conversationId}`,
       },
-    ]);
-    client?.invalidateQueries({ queryKey: QUERY_KEYS.conversations });
-  });
-  socket.on('notification:new', (payload: any) => {
-    const notification = mapNotification(payload);
-    cache.syncNotifications([notification]);
-    client?.invalidateQueries({ queryKey: QUERY_KEYS.notifications });
-  });
+      async () => {
+        const messages = await chatService.getMessages(conversationId);
+        client?.setQueryData([...QUERY_KEYS.messages, conversationId], messages);
+        client?.invalidateQueries({ queryKey: QUERY_KEYS.conversations });
+      }
+    )
+    .on(
+      'postgres_changes',
+      {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'conversation_participants',
+        filter: `conversation_id=eq.${conversationId}`,
+      },
+      () => client?.invalidateQueries({ queryKey: QUERY_KEYS.conversations })
+    )
+    .subscribe();
+
+  channels.push(channel);
 };
 
-const resolveTypingConversation = (payload: any) => {
-  if (payload.conversationId) {
-    return db.conversations.find((item) => item.id === payload.conversationId);
-  }
-  if (payload.projectId) {
-    return db.conversations.find((item) => item.projectId === payload.projectId);
-  }
-  return undefined;
-};
-
-const getActualConversationId = (conversationId: string) => {
-  if (!isProjectPlaceholder(conversationId)) {
-    return conversationId;
+const insertMessageAttachments = async (messageId: string, attachments: FileResource[]) => {
+  if (!attachments.length) {
+    return;
   }
 
-  return db.conversations.find((item) => item.id === conversationId)?.lastMessageId
-    ? conversationId
-    : '';
+  const { error } = await supabaseAny.from('message_attachments').insert(
+    attachments.map((file) => ({
+      id: file.id,
+      message_id: messageId,
+      bucket_id: 'cloudinary',
+      object_path: file.url,
+      name: file.name,
+      mime_type: file.type,
+      size_kb: file.sizeKb,
+      uploaded_by: file.uploadedBy,
+    }))
+  );
+  throwIfSupabaseError(error);
 };
 
 export const chatService = {
-  connect(accessToken: string, queryClient: QueryClient) {
+  connect(_accessToken: string, queryClient: QueryClient) {
     client = queryClient;
-
-    if (socket?.connected) {
-      return socket;
-    }
-
-    socket = io(SOCKET_BASE_URL, {
-      auth: { token: accessToken },
-      transports: ['websocket'],
-    });
-
-    bindSocket();
-    return socket;
+    return supabase.channel('collabi-chat');
   },
   disconnect() {
-    socket?.removeAllListeners();
-    socket?.disconnect();
-    socket = null;
+    removeChannels();
+    notificationService.unsubscribe();
     client = null;
   },
-  async getInbox(_userId: string) {
-    const response = await apiRequest<any[]>('/chat/conversations', {
-      auth: true,
-      query: { page: 1, limit: 50 },
-    });
+  subscribeToConversation,
+  async getInbox(userId: string) {
+    const { data, error } = await supabaseAny
+      .from('conversations')
+      .select(conversationSelect)
+      .order('updated_at', { ascending: false })
+      .limit(50);
 
-    const conversations = response.data.map((item) => {
-      item.participants?.forEach((participant: any) => {
-        if (participant && typeof participant === 'object') {
-          cache.syncUsers([mapUser(participant)]);
-        }
-      });
-      if (item.lastMessage && typeof item.lastMessage === 'object') {
-        cache.syncMessages([mapMessage(item.lastMessage)]);
-      }
-      return mapConversation(item);
-    });
+    throwIfSupabaseError(error);
 
-    cache.replaceConversations(sortConversations(conversations));
-    return sortConversations(conversations);
+    const conversations = sortConversations(
+      (data ?? [])
+        .filter((item: any) =>
+          (item.participants ?? []).some((participant: any) => participant.user_id === userId)
+        )
+        .map(syncConversation)
+    );
+
+    cache.replaceConversations(conversations);
+    return conversations;
   },
   async getMessages(conversationId: string) {
-    if (isProjectPlaceholder(conversationId)) {
-      return [];
-    }
+    subscribeToConversation(conversationId);
 
-    const response = await apiRequest<any[]>(`/chat/conversations/${conversationId}/messages`, {
-      auth: true,
-      query: { page: 1, limit: 100 },
-    });
+    const { data, error } = await supabaseAny
+      .from('messages')
+      .select(messageSelect)
+      .eq('conversation_id', conversationId)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: true })
+      .limit(100);
 
-    const messages = response.data.map((item) => {
-      if (item.sender && typeof item.sender === 'object') {
-        cache.syncUsers([mapUser(item.sender)]);
-      }
-      return mapMessage(item);
-    });
-    updateMessagesCache(conversationId, () => dedupeMessages(messages));
-    return dedupeMessages(messages);
+    throwIfSupabaseError(error);
+
+    const messages = dedupeMessages((data ?? []).map(syncMessage));
+    updateMessagesCache(conversationId, () => messages);
+    return messages;
   },
-  async getPrivateConversation(_currentUserId: string, otherUserId: string) {
-    const response = await apiRequest<any>('/chat/conversations/private', {
-      method: 'POST',
-      auth: true,
-      json: { participantId: otherUserId },
-    });
-
-    const conversation = mapConversation(response.data);
-    cache.syncConversations([conversation]);
-    return conversation;
-  },
-  async getProjectConversation(projectId: string) {
-    const inbox = await this.getInbox('');
-    const existing = inbox.find((item) => item.projectId === projectId);
+  async getPrivateConversation(currentUserId: string, otherUserId: string) {
+    const inbox = await this.getInbox(currentUserId);
+    const existing = inbox.find(
+      (item) =>
+        item.type === 'private' &&
+        item.participantIds.includes(currentUserId) &&
+        item.participantIds.includes(otherUserId)
+    );
     if (existing) {
       return existing;
     }
 
-    const response = await apiRequest<any[]>(`/chat/projects/${projectId}/messages`, {
-      auth: true,
-      query: { page: 1, limit: 100 },
-    });
+    const { data: conversation, error } = await supabaseAny
+      .from('conversations')
+      .insert({ type: 'private', title: 'Private Chat', created_by: currentUserId })
+      .select('*')
+      .single();
+    throwIfSupabaseError(error);
 
-    const messages = response.data.map(mapMessage);
-    const actualConversationId = messages[0]?.conversationId;
-    if (actualConversationId) {
-      const latestMessage = messages[messages.length - 1];
-      const derivedConversation: Conversation = {
-        id: actualConversationId,
-        type: 'project',
-        participantIds: db.memberships
-          .filter((item) => item.projectId === projectId && item.status === 'active')
-          .map((item) => item.studentId),
-        projectId,
-        title: db.projects.find((item) => item.id === projectId)?.title ?? 'Project Chat',
-        lastMessageId: latestMessage?.id,
-        typingUserIds: [],
-        unreadBy: {},
-        presence: {},
-        updatedAt: latestMessage?.createdAt,
-      };
-      cache.syncConversations([derivedConversation]);
-      updateMessagesCache(actualConversationId, () => dedupeMessages(messages));
-      return derivedConversation;
+    const { error: participantError } = await supabaseAny.from('conversation_participants').insert([
+      { conversation_id: conversation.id, user_id: currentUserId },
+      { conversation_id: conversation.id, user_id: otherUserId },
+    ]);
+    throwIfSupabaseError(participantError);
+
+    const { data, error: readError } = await supabaseAny
+      .from('conversations')
+      .select(conversationSelect)
+      .eq('id', conversation.id)
+      .single();
+    throwIfSupabaseError(readError);
+
+    return syncConversation(data);
+  },
+  async getProjectConversation(projectId: string) {
+    const { data: existing, error: existingError } = await supabaseAny
+      .from('conversations')
+      .select(conversationSelect)
+      .eq('type', 'project')
+      .eq('project_id', projectId)
+      .maybeSingle();
+    throwIfSupabaseError(existingError);
+
+    if (existing) {
+      return syncConversation(existing);
     }
 
-    const placeholder: Conversation = {
-      id: `${PROJECT_PLACEHOLDER_PREFIX}${projectId}`,
-      type: 'project',
-      participantIds: db.memberships
-        .filter((item) => item.projectId === projectId && item.status === 'active')
-        .map((item) => item.studentId),
-      projectId,
-      title: db.projects.find((item) => item.id === projectId)?.title ?? 'Project Chat',
-      typingUserIds: [],
-      unreadBy: {},
-      presence: {},
-    };
-    cache.syncConversations([placeholder]);
-    return placeholder;
+    const project = db.projects.find((item) => item.id === projectId);
+    const { data: conversation, error } = await supabaseAny
+      .from('conversations')
+      .insert({
+        type: 'project',
+        project_id: projectId,
+        title: project?.title ?? 'Project Chat',
+        created_by: project?.ownerId,
+      })
+      .select('*')
+      .single();
+    throwIfSupabaseError(error);
+
+    const { data: memberships, error: membershipError } = await supabaseAny
+      .from('memberships')
+      .select('student_id')
+      .eq('project_id', projectId)
+      .eq('status', 'active');
+    throwIfSupabaseError(membershipError);
+
+    const participantIds = Array.from(
+      new Set(((memberships ?? []) as { student_id: string }[]).map((item) => item.student_id))
+    );
+    if (participantIds.length) {
+      const { error: participantError } = await supabaseAny
+        .from('conversation_participants')
+        .insert(
+          participantIds.map((userId) => ({
+            conversation_id: conversation.id,
+            user_id: userId,
+          }))
+        );
+      throwIfSupabaseError(participantError);
+    }
+
+    const { data, error: readError } = await supabaseAny
+      .from('conversations')
+      .select(conversationSelect)
+      .eq('id', conversation.id)
+      .single();
+    throwIfSupabaseError(readError);
+
+    return syncConversation(data);
   },
   async joinProjectRoom(projectId: string) {
-    socket?.emit('join_project_room', { projectId });
+    const conversation = await this.getProjectConversation(projectId);
+    subscribeToConversation(conversation.id);
     return { connected: true };
   },
   async sendMessage(
@@ -312,94 +284,72 @@ export const chatService = {
     body: string,
     attachments: FileResource[] = []
   ) {
-    const conversation = db.conversations.find((item) => item.id === conversationId);
-    if (!conversation) {
-      throw new Error('Conversation not found');
-    }
+    const conversation = requireData(
+      db.conversations.find((item) => item.id === conversationId) ?? null,
+      'Conversation not found'
+    );
 
-    if (conversation.type === 'project' && conversation.projectId) {
-      const response = await apiRequest<any>('/chat/messages/project', {
-        method: 'POST',
-        auth: true,
-        json: {
-          projectId: conversation.projectId,
-          content: body,
-          attachments: attachments.map((item) => item.id),
-        },
-      });
+    const { data, error } = await supabaseAny
+      .from('messages')
+      .insert({ conversation_id: conversation.id, sender_id: senderId, body })
+      .select(messageSelect)
+      .single();
+    throwIfSupabaseError(error);
 
-      applyIncomingMessage(response.data);
-      return mapMessage(response.data.message);
-    }
+    await insertMessageAttachments(data.id, attachments);
 
-    const recipientId = conversation.participantIds.find((item) => item !== senderId);
-    if (!recipientId) {
-      throw new Error('Recipient not found');
-    }
+    const message = await this.getMessage(data.id);
+    updateMessagesCache(conversation.id, (items) => dedupeMessages([...items, message]));
+    client?.invalidateQueries({ queryKey: QUERY_KEYS.conversations });
+    return message;
+  },
+  async getMessage(messageId: string) {
+    const { data, error } = await supabaseAny
+      .from('messages')
+      .select(messageSelect)
+      .eq('id', messageId)
+      .single();
 
-    const response = await apiRequest<any>('/chat/messages/private', {
-      method: 'POST',
-      auth: true,
-      json: {
-        recipientId,
-        content: body,
-        attachments: attachments.map((item) => item.id),
-      },
-    });
-
-    applyIncomingMessage(response.data);
-    return mapMessage(response.data.message);
+    throwIfSupabaseError(error);
+    return syncMessage(data);
   },
   async editMessage(messageId: string, body: string) {
-    const response = await apiRequest<any>(`/chat/messages/${messageId}`, {
-      method: 'PATCH',
-      auth: true,
-      json: { content: body },
-    });
+    const { data, error } = await supabaseAny
+      .from('messages')
+      .update({ body, edited_at: new Date().toISOString() })
+      .eq('id', messageId)
+      .select(messageSelect)
+      .single();
 
-    const message = mapMessage(response.data);
-    cache.syncMessages([message]);
-    return message;
+    throwIfSupabaseError(error);
+    return syncMessage(data);
   },
   async deleteMessage(messageId: string) {
-    const response = await apiRequest<any>(`/chat/messages/${messageId}`, {
-      method: 'DELETE',
-      auth: true,
-    });
+    const { data, error } = await supabaseAny
+      .from('messages')
+      .update({ deleted_at: new Date().toISOString() })
+      .eq('id', messageId)
+      .select(messageSelect)
+      .single();
 
-    const message = mapMessage(response.data);
-    cache.syncMessages([message]);
-    return message;
+    throwIfSupabaseError(error);
+    return syncMessage(data);
   },
   async setTyping(conversationId: string, userId: string, isTyping: boolean) {
-    const conversation = db.conversations.find((item) => item.id === conversationId);
-    if (!conversation || !socket) {
-      return conversation;
-    }
+    const { error } = await supabaseAny
+      .from('conversation_participants')
+      .update({ typing_until: isTyping ? new Date(Date.now() + 5000).toISOString() : null })
+      .eq('conversation_id', conversationId)
+      .eq('user_id', userId);
 
-    if (conversation.type === 'project' && conversation.projectId) {
-      socket.emit(isTyping ? 'typing_start' : 'typing_stop', {
-        projectId: conversation.projectId,
-      });
-    } else {
-      const recipientId = conversation.participantIds.find((item) => item !== userId);
-      socket.emit(isTyping ? 'typing_start' : 'typing_stop', {
-        recipientId,
-        conversationId: getActualConversationId(conversationId) || conversationId,
-      });
-    }
-
-    return conversation;
+    throwIfSupabaseError(error);
+    return db.conversations.find((item) => item.id === conversationId);
   },
   async markConversationRead(conversationId: string, _userId: string) {
-    if (isProjectPlaceholder(conversationId)) {
-      return db.conversations.find((item) => item.id === conversationId);
-    }
-
-    await apiRequest(`/chat/conversations/${conversationId}/read`, {
-      method: 'PATCH',
-      auth: true,
+    const { error } = await supabaseAny.rpc('mark_conversation_read', {
+      p_conversation_id: conversationId,
     });
+    throwIfSupabaseError(error);
 
     const updated = db.conversations.find((item) => item.id === conversationId);
     if (updated) {

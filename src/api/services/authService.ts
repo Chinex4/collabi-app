@@ -1,17 +1,38 @@
 import { cache } from '@/data/cache';
 import { AuthResponse, Session } from '@/types';
 
-import { apiRequest } from '../http';
+import { ApiError, requireData, throwIfSupabaseError } from '../errors';
 import { mapUser } from '../mappers';
+import { supabase } from '../supabase';
 
-const buildAuthResponse = (data: any): AuthResponse => {
-  const user = mapUser(data.user);
+const supabaseAny = supabase as any;
+
+const getUserProfile = async (userId: string) => {
+  const { data, error } = await supabase.from('users').select('*').eq('id', userId).single();
+
+  throwIfSupabaseError(error);
+
+  const user = mapUser(requireData(data, 'User profile not found'));
   cache.syncUsers([user]);
+
+  return user;
+};
+
+const buildAuthResponse = async (
+  accessToken: string | undefined,
+  refreshToken: string | undefined,
+  userId: string | undefined
+): Promise<AuthResponse> => {
+  if (!accessToken || !refreshToken || !userId) {
+    throw new ApiError('Session not available', 401);
+  }
+
+  const user = await getUserProfile(userId);
 
   return {
     session: {
-      accessToken: data.accessToken,
-      refreshToken: data.refreshToken,
+      accessToken,
+      refreshToken,
       role: user.role,
       userId: user.id,
     },
@@ -19,22 +40,35 @@ const buildAuthResponse = (data: any): AuthResponse => {
   };
 };
 
+const login = async (email: string, password: string, role: 'student' | 'admin') => {
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  throwIfSupabaseError(error);
+
+  const response = await buildAuthResponse(
+    data.session?.access_token,
+    data.session?.refresh_token,
+    data.user?.id
+  );
+
+  if (response.user.role !== role) {
+    await supabase.auth.signOut();
+    throw new ApiError(`This account is not a ${role} account`, 403);
+  }
+
+  if (response.user.status !== 'active') {
+    await supabase.auth.signOut();
+    throw new ApiError('This account is not active', 403);
+  }
+
+  return response;
+};
+
 export const authService = {
   async studentLogin(email: string, password: string) {
-    const response = await apiRequest<any>('/auth/login', {
-      method: 'POST',
-      json: { email, password },
-    });
-
-    return buildAuthResponse(response.data);
+    return login(email, password, 'student');
   },
   async adminLogin(email: string, password: string) {
-    const response = await apiRequest<any>('/auth/admin/login', {
-      method: 'POST',
-      json: { email, password },
-    });
-
-    return buildAuthResponse(response.data);
+    return login(email, password, 'admin');
   },
   async registerStudent(payload: {
     fullName: string;
@@ -44,104 +78,115 @@ export const authService = {
     departmentId: string;
     level: string;
   }) {
-    const response = await apiRequest<any>('/auth/register', {
-      method: 'POST',
-      json: {
-        fullName: payload.fullName,
-        email: payload.email,
-        password: payload.password,
-        faculty: payload.facultyId,
-        department: payload.departmentId,
-        level: Number(payload.level) || payload.level,
+    const { error } = await supabase.auth.signUp({
+      email: payload.email,
+      password: payload.password,
+      options: {
+        data: {
+          role: 'student',
+          full_name: payload.fullName,
+          faculty_id: payload.facultyId,
+          department_id: payload.departmentId,
+          level: payload.level,
+        },
       },
     });
 
+    throwIfSupabaseError(error);
+
     return {
       email: payload.email,
-      message: response.message,
+      message: 'Account created. Check your email for the verification code.',
     };
   },
   async verifyEmailOtp(email: string, otp: string) {
-    const response = await apiRequest<any>('/auth/verify-email', {
-      method: 'POST',
-      json: { email, otp },
+    const { data, error } = await supabase.auth.verifyOtp({
+      email,
+      token: otp,
+      type: 'signup',
     });
 
-    const user = mapUser(response.data);
-    cache.syncUsers([user]);
+    throwIfSupabaseError(error);
 
-    return { user, message: response.message };
+    const user = await getUserProfile(requireData(data.user, 'Verified user not found').id);
+
+    return { user, message: 'Email verified successfully' };
   },
   async resendVerificationOtp(email: string) {
-    const response = await apiRequest('/auth/resend-verification-otp', {
-      method: 'POST',
-      json: { email },
+    const { error } = await supabase.auth.resend({
+      email,
+      type: 'signup',
     });
 
-    return { message: response.message };
+    throwIfSupabaseError(error);
+
+    return { message: 'Verification code sent' };
   },
   async forgotPassword(email: string) {
-    const response = await apiRequest('/auth/forgot-password', {
-      method: 'POST',
-      json: { email },
-    });
+    const { error } = await supabase.auth.resetPasswordForEmail(email);
+    throwIfSupabaseError(error);
 
-    return { email, message: response.message };
+    return { email, message: 'Password reset code sent' };
   },
   async resetPassword(email: string, otp: string, password: string) {
-    const response = await apiRequest('/auth/reset-password', {
-      method: 'POST',
-      json: { email, otp, password },
+    const { error: verifyError } = await supabase.auth.verifyOtp({
+      email,
+      token: otp,
+      type: 'recovery',
     });
+    throwIfSupabaseError(verifyError);
 
-    return { message: response.message };
+    const { error: updateError } = await supabase.auth.updateUser({ password });
+    throwIfSupabaseError(updateError);
+
+    return { message: 'Password reset successfully' };
   },
-  async changePassword(_userId: string, currentPassword: string, newPassword: string) {
-    const response = await apiRequest('/auth/change-password', {
-      method: 'POST',
-      auth: true,
-      json: { currentPassword, newPassword },
-    });
+  async changePassword(_userId: string, _currentPassword: string, newPassword: string) {
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    throwIfSupabaseError(error);
 
-    return { message: response.message };
+    return { message: 'Password updated successfully' };
   },
-  async deactivateAccount(_userId: string) {
-    const response = await apiRequest('/auth/deactivate', {
-      method: 'PATCH',
-      auth: true,
-    });
+  async deactivateAccount(userId: string) {
+    const { error } = await supabaseAny
+      .from('users')
+      .update({ status: 'suspended' })
+      .eq('id', userId);
+    throwIfSupabaseError(error);
 
-    return { message: response.message };
+    return { message: 'Account deactivated' };
   },
-  async softDeleteAccount(_userId: string) {
-    const response = await apiRequest('/auth/delete-account', {
-      method: 'DELETE',
-      auth: true,
-    });
+  async softDeleteAccount(userId: string) {
+    const { error } = await supabaseAny
+      .from('users')
+      .update({ status: 'deleted' })
+      .eq('id', userId);
+    throwIfSupabaseError(error);
 
-    return { message: response.message };
+    await supabase.auth.signOut();
+
+    return { message: 'Account deleted' };
   },
   async refreshSession(session: Session) {
-    const response = await apiRequest<any>('/auth/refresh', {
-      method: 'POST',
-      json: { refreshToken: session.refreshToken },
+    const { data, error } = await supabase.auth.setSession({
+      access_token: session.accessToken,
+      refresh_token: session.refreshToken,
     });
 
-    return buildAuthResponse(response.data);
+    throwIfSupabaseError(error);
+
+    return buildAuthResponse(
+      data.session?.access_token,
+      data.session?.refresh_token,
+      data.user?.id
+    );
   },
-  async getCurrentUser(_userId: string) {
-    const response = await apiRequest<any>('/auth/me', {
-      auth: true,
-    });
-    const user = mapUser(response.data);
-    cache.syncUsers([user]);
-    return user;
+  async getCurrentUser(userId: string) {
+    return getUserProfile(userId);
   },
   async logout() {
-    await apiRequest('/auth/logout', {
-      method: 'POST',
-      auth: true,
-    });
+    const { error } = await supabase.auth.signOut();
+    throwIfSupabaseError(error);
 
     return { success: true };
   },

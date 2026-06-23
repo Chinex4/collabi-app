@@ -109,8 +109,7 @@ export const ProjectFormScreen = ({
   });
 
   const uploadMutation = useMutation({
-    mutationFn: () =>
-      uploadService.pickDocument(currentUser!.id, 'project'),
+    mutationFn: () => uploadService.pickDocument(currentUser!.id, 'project'),
     onSuccess: (file) => {
       if (!file) {
         return;

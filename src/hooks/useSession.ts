@@ -2,6 +2,7 @@ import { useQueryClient } from '@tanstack/react-query';
 
 import { authService } from '@/api/services/authService';
 import { chatService } from '@/api/services/chatService';
+import { notificationService } from '@/api/services/notificationService';
 import { QUERY_KEYS } from '@/constants';
 import { useAppDispatch, useAppSelector } from '@/hooks/useAppStore';
 import { clearAuth, setCurrentUser, setSession } from '@/store/authSlice';
@@ -25,11 +26,13 @@ export const useSession = () => {
     await sessionStorage.setSession(payload.session);
     queryClient.setQueryData(QUERY_KEYS.currentUser, payload.user);
     chatService.connect(payload.session.accessToken, queryClient);
+    notificationService.subscribe(payload.session.userId, queryClient);
   };
 
   const signOut = async () => {
     await authService.logout();
     chatService.disconnect();
+    notificationService.unsubscribe();
     dispatch(clearAuth());
     await sessionStorage.setSession(null);
     queryClient.clear();

@@ -2,8 +2,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { BlurView } from 'expo-blur';
+import { GlassView, isLiquidGlassAvailable } from 'expo-glass-effect';
 import React, { useEffect } from 'react';
-import { View } from 'react-native';
+import { Platform, StyleSheet, View } from 'react-native';
 
 import { AppButton, AppHeader, AppScreen, AppText, LoadingState } from '@/components/common';
 import { useNotifications } from '@/hooks/useQueries';
@@ -76,6 +78,67 @@ const navTheme = {
   },
 };
 
+const GlassTabBarBackground = () => {
+  if (isLiquidGlassAvailable()) {
+    return (
+      <GlassView
+        glassEffectStyle="regular"
+        tintColor="rgba(245, 236, 252, 0.28)"
+        colorScheme="light"
+        pointerEvents="none"
+        style={StyleSheet.absoluteFill}
+      />
+    );
+  }
+
+  return (
+    <BlurView
+      tint="systemUltraThinMaterialLight"
+      intensity={Platform.OS === 'android' ? 70 : 85}
+      blurMethod={Platform.OS === 'android' ? 'dimezisBlurViewSdk31Plus' : 'none'}
+      pointerEvents="none"
+      style={StyleSheet.absoluteFill}>
+      <View style={styles.blurTint} />
+    </BlurView>
+  );
+};
+
+const glassTabBarOptions = {
+  tabBarActiveTintColor: '#7921BF',
+  tabBarInactiveTintColor: '#756681',
+  tabBarActiveBackgroundColor: 'rgba(121, 33, 191, 0.10)',
+  tabBarBackground: GlassTabBarBackground,
+  tabBarLabelStyle: {
+    fontSize: 11,
+    fontWeight: '600' as const,
+    marginBottom: 1,
+  },
+  tabBarItemStyle: {
+    borderRadius: 22,
+    marginHorizontal: 2,
+    marginVertical: 5,
+  },
+  tabBarStyle: {
+    height: 76,
+    marginHorizontal: 10,
+    marginBottom: 8,
+    paddingHorizontal: 4,
+    paddingTop: 3,
+    paddingBottom: 5,
+    borderTopWidth: 0,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255, 255, 255, 0.72)',
+    borderRadius: 30,
+    backgroundColor: 'transparent',
+    overflow: 'hidden' as const,
+    shadowColor: '#32104A',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.16,
+    shadowRadius: 18,
+    elevation: 12,
+  },
+};
+
 const GuestNavigator = () => (
   <Stack.Navigator screenOptions={{ headerShown: false }}>
     <Stack.Screen name="Welcome" component={WelcomeScreen} />
@@ -105,15 +168,7 @@ const StudentTabs = () => {
     <Tab.Navigator
       screenOptions={({ route }) => ({
         headerShown: false,
-        tabBarActiveTintColor: '#7921BF',
-        tabBarInactiveTintColor: '#7C6C90',
-        tabBarStyle: {
-          height: 78,
-          paddingTop: 8,
-          paddingBottom: 14,
-          borderTopWidth: 0,
-          backgroundColor: '#FFFFFF',
-        },
+        ...glassTabBarOptions,
         tabBarIcon: ({ color, size }) => {
           const icons: Record<string, keyof typeof Ionicons.glyphMap> = {
             HomeTab: 'home',
@@ -207,15 +262,7 @@ const AdminTabs = () => (
   <Tab.Navigator
     screenOptions={({ route }) => ({
       headerShown: false,
-      tabBarActiveTintColor: '#7921BF',
-      tabBarInactiveTintColor: '#7C6C90',
-      tabBarStyle: {
-        height: 78,
-        paddingTop: 8,
-        paddingBottom: 14,
-        borderTopWidth: 0,
-        backgroundColor: '#FFFFFF',
-      },
+      ...glassTabBarOptions,
       tabBarIcon: ({ color, size }) => {
         const icons: Record<string, keyof typeof Ionicons.glyphMap> = {
           DashboardTab: 'speedometer',
@@ -279,3 +326,11 @@ export const RootNavigator = () => {
     </NavigationContainer>
   );
 };
+
+const styles = StyleSheet.create({
+  blurTint: {
+    position: 'absolute',
+    inset: 0,
+    backgroundColor: 'rgba(250, 247, 252, 0.58)',
+  },
+});

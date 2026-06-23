@@ -171,7 +171,6 @@ export const AppScreen = ({
         className="flex-1 pt-12"
         contentContainerStyle={{ padding: 20, paddingBottom: 40 }}
         showsVerticalScrollIndicator={false}>
-          
         {children}
       </ScrollView>
     </>
