@@ -9,7 +9,7 @@
     "experiments": {
       "tsconfigPaths": true
     },
-    "plugins": ["@react-native-community/datetimepicker", "expo-status-bar"],
+    "plugins": ["@react-native-community/datetimepicker"],
     "orientation": "portrait",
     "icon": "./assets/logo.png",
     "userInterfaceStyle": "automatic",

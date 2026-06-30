@@ -95,7 +95,7 @@ const GlassTabBarBackground = () => {
     <BlurView
       tint="systemUltraThinMaterialLight"
       intensity={Platform.OS === 'android' ? 70 : 85}
-      blurMethod={Platform.OS === 'android' ? 'dimezisBlurViewSdk31Plus' : 'none'}
+      experimentalBlurMethod={Platform.OS === 'android' ? 'dimezisBlurView' : undefined}
       pointerEvents="none"
       style={StyleSheet.absoluteFill}>
       <View style={styles.blurTint} />
