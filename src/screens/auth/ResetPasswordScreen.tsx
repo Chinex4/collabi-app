@@ -8,6 +8,7 @@ import { FormOtpInput, FormPasswordInput, FormTextInput, useAppForm } from '@/co
 import { useAppDispatch } from '@/hooks/useAppStore';
 import { showToast } from '@/store/uiSlice';
 import { resetPasswordSchema } from '@/utils/validation';
+import { AuthBackButton } from './AuthChrome';
 
 export const ResetPasswordScreen = ({ route, navigation }: any) => {
   const dispatch = useAppDispatch();
@@ -34,6 +35,7 @@ export const ResetPasswordScreen = ({ route, navigation }: any) => {
 
   return (
     <AppScreen withGradient>
+      <AuthBackButton navigation={navigation} />
       <AppText className="text-3xl font-bold text-slate-950">Reset Password</AppText>
       <AppText className="mt-2 text-sm text-slate-500">
         Use the OTP sent to your email. The mock reset code is `123456`.

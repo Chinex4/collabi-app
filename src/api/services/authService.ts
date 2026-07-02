@@ -96,31 +96,8 @@ export const authService = {
 
     return {
       email: payload.email,
-      message: 'Account created. Check your email for the verification code.',
+      message: 'Account created. Please sign in.',
     };
-  },
-  async verifyEmailOtp(email: string, otp: string) {
-    const { data, error } = await supabase.auth.verifyOtp({
-      email,
-      token: otp,
-      type: 'signup',
-    });
-
-    throwIfSupabaseError(error);
-
-    const user = await getUserProfile(requireData(data.user, 'Verified user not found').id);
-
-    return { user, message: 'Email verified successfully' };
-  },
-  async resendVerificationOtp(email: string) {
-    const { error } = await supabase.auth.resend({
-      email,
-      type: 'signup',
-    });
-
-    throwIfSupabaseError(error);
-
-    return { message: 'Verification code sent' };
   },
   async forgotPassword(email: string) {
     const { error } = await supabase.auth.resetPasswordForEmail(email);

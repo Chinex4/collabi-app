@@ -2,7 +2,7 @@ import { yupResolver } from '@hookform/resolvers/yup';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import React, { useState } from 'react';
 import { Controller, FieldValues, UseFormProps, useForm } from 'react-hook-form';
-import { Pressable, TextInput, View } from 'react-native';
+import { Pressable, StyleSheet, TextInput, View } from 'react-native';
 
 import { AppButton, AppInput, AppText, Chip } from '@/components/common';
 import { cn, formatDate } from '@/utils/helpers';
@@ -129,7 +129,8 @@ export const FormSelect = ({
         <FieldShell label={label} error={error?.message}>
           <Pressable
             onPress={() => setOpen((current) => !current)}
-            className="rounded-2xl border border-violet-200 bg-white px-4 py-3">
+            style={styles.inputLikeControl}
+            className="justify-center rounded-2xl border border-violet-200 bg-white px-4 py-4">
             <AppText className={value ? 'text-slate-900' : 'text-slate-400'}>
               {options.find((item) => item.value === value)?.label ??
                 `Select ${label.toLowerCase()}`}
@@ -213,7 +214,8 @@ export const FormDatePicker = ({ control, name, label }: FormFieldProps) => {
         <FieldShell label={label} error={error?.message}>
           <Pressable
             onPress={() => setShow(true)}
-            className="rounded-2xl border border-violet-200 bg-white px-4 py-3">
+            style={styles.inputLikeControl}
+            className="justify-center rounded-2xl border border-violet-200 bg-white px-4 py-4">
             <AppText>{value ? formatDate(String(value)) : 'Pick a date'}</AppText>
           </Pressable>
           {show ? (
@@ -326,3 +328,9 @@ export const FormTagInput = ({
     />
   );
 };
+
+const styles = StyleSheet.create({
+  inputLikeControl: {
+    minHeight: 56,
+  },
+});

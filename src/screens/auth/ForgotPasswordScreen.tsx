@@ -8,6 +8,7 @@ import { FormTextInput, useAppForm } from '@/components/forms';
 import { useAppDispatch } from '@/hooks/useAppStore';
 import { showToast } from '@/store/uiSlice';
 import { forgotPasswordSchema } from '@/utils/validation';
+import { AuthBackButton } from './AuthChrome';
 
 export const ForgotPasswordScreen = ({ navigation }: any) => {
   const dispatch = useAppDispatch();
@@ -27,6 +28,7 @@ export const ForgotPasswordScreen = ({ navigation }: any) => {
 
   return (
     <AppScreen withGradient>
+      <AuthBackButton navigation={navigation} />
       <AppText className="text-3xl font-bold text-slate-950">Forgot Password</AppText>
       <AppText className="mt-2 text-sm text-slate-500">
         Enter the email linked to your account to receive an OTP reset code.

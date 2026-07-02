@@ -2,8 +2,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { BlurView } from 'expo-blur';
-import { GlassView, isLiquidGlassAvailable } from 'expo-glass-effect';
 import React, { useEffect } from 'react';
 import { Platform, StyleSheet, View } from 'react-native';
 
@@ -30,7 +28,6 @@ import {
   RegisterScreen,
   ResetPasswordScreen,
   StudentLoginScreen,
-  VerifyEmailOtpScreen,
   WelcomeScreen,
 } from '@/screens/auth';
 import {
@@ -66,6 +63,39 @@ import { setUnreadCount } from '@/store/notificationsSlice';
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
+type GlassEffectModule = {
+  GlassView: React.ComponentType<
+    React.ComponentProps<typeof View> & {
+      glassEffectStyle?: 'clear' | 'regular';
+      tintColor?: string;
+      colorScheme?: 'light' | 'dark';
+    }
+  >;
+  isLiquidGlassAvailable: () => boolean;
+};
+
+let glassEffectModule: GlassEffectModule | null | undefined;
+
+const getGlassEffectModule = () => {
+  if (Platform.OS !== 'ios') {
+    return null;
+  }
+
+  if (glassEffectModule !== undefined) {
+    return glassEffectModule;
+  }
+
+  try {
+    // Loading this at module scope breaks Expo Go because the native view manager is unavailable there.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    glassEffectModule = require('expo-glass-effect') as GlassEffectModule;
+  } catch {
+    glassEffectModule = null;
+  }
+
+  return glassEffectModule;
+};
+
 const navTheme = {
   ...DefaultTheme,
   colors: {
@@ -79,9 +109,21 @@ const navTheme = {
 };
 
 const GlassTabBarBackground = () => {
-  if (isLiquidGlassAvailable()) {
+  const glassEffect = getGlassEffectModule();
+
+  const canUseGlassEffect = (() => {
+    try {
+      return !!glassEffect?.isLiquidGlassAvailable();
+    } catch {
+      return false;
+    }
+  })();
+
+  if (canUseGlassEffect && glassEffect) {
+    const NativeGlassView = glassEffect.GlassView;
+
     return (
-      <GlassView
+      <NativeGlassView
         glassEffectStyle="regular"
         tintColor="rgba(245, 236, 252, 0.28)"
         colorScheme="light"
@@ -91,51 +133,43 @@ const GlassTabBarBackground = () => {
     );
   }
 
-  return (
-    <BlurView
-      tint="systemUltraThinMaterialLight"
-      intensity={Platform.OS === 'android' ? 70 : 85}
-      experimentalBlurMethod={Platform.OS === 'android' ? 'dimezisBlurView' : undefined}
-      pointerEvents="none"
-      style={StyleSheet.absoluteFill}>
-      <View style={styles.blurTint} />
-    </BlurView>
-  );
+  return <View pointerEvents="none" style={styles.tabBarFallbackSurface} />;
 };
 
 const glassTabBarOptions = {
   tabBarActiveTintColor: '#7921BF',
-  tabBarInactiveTintColor: '#756681',
-  tabBarActiveBackgroundColor: 'rgba(121, 33, 191, 0.10)',
+  tabBarInactiveTintColor: '#7D7089',
+  tabBarActiveBackgroundColor: 'rgba(121, 33, 191, 0.12)',
   tabBarBackground: GlassTabBarBackground,
   tabBarLabelStyle: {
-    fontSize: 11,
-    fontWeight: '600' as const,
-    marginBottom: 1,
+    fontSize: 10,
+    fontWeight: '700' as const,
+    marginTop: 2,
   },
   tabBarItemStyle: {
-    borderRadius: 22,
-    marginHorizontal: 2,
-    marginVertical: 5,
+    borderRadius: 18,
+    marginHorizontal: 3,
+    marginVertical: 7,
+    paddingVertical: 3,
   },
   tabBarStyle: {
-    height: 76,
-    marginHorizontal: 10,
-    marginBottom: 8,
-    paddingHorizontal: 4,
-    paddingTop: 3,
-    paddingBottom: 5,
+    height: 72,
+    marginHorizontal: 14,
+    marginBottom: 10,
+    paddingHorizontal: 6,
+    paddingTop: 4,
+    paddingBottom: 6,
     borderTopWidth: 0,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255, 255, 255, 0.72)',
-    borderRadius: 30,
-    backgroundColor: 'transparent',
+    borderColor: 'rgba(229, 216, 244, 0.95)',
+    borderRadius: 28,
+    backgroundColor: 'rgba(255, 255, 255, 0.94)',
     overflow: 'hidden' as const,
     shadowColor: '#32104A',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.16,
-    shadowRadius: 18,
-    elevation: 12,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.08,
+    shadowRadius: 14,
+    elevation: 4,
   },
 };
 
@@ -145,7 +179,6 @@ const GuestNavigator = () => (
     <Stack.Screen name="StudentLogin" component={StudentLoginScreen} />
     <Stack.Screen name="AdminLogin" component={AdminLoginScreen} />
     <Stack.Screen name="Register" component={RegisterScreen} />
-    <Stack.Screen name="VerifyEmailOtp" component={VerifyEmailOtpScreen} />
     <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
     <Stack.Screen name="ResetPassword" component={ResetPasswordScreen} />
   </Stack.Navigator>
@@ -328,9 +361,9 @@ export const RootNavigator = () => {
 };
 
 const styles = StyleSheet.create({
-  blurTint: {
+  tabBarFallbackSurface: {
     position: 'absolute',
     inset: 0,
-    backgroundColor: 'rgba(250, 247, 252, 0.58)',
+    backgroundColor: 'rgba(255, 255, 255, 0.96)',
   },
 });

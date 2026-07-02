@@ -9,6 +9,7 @@ import { useSession } from '@/hooks/useSession';
 import { useAppDispatch } from '@/hooks/useAppStore';
 import { showToast } from '@/store/uiSlice';
 import { loginSchema } from '@/utils/validation';
+import { AuthBackButton, AuthSwitchLink } from './AuthChrome';
 
 export const StudentLoginScreen = ({ navigation, route }: any) => {
   const dispatch = useAppDispatch();
@@ -30,6 +31,7 @@ export const StudentLoginScreen = ({ navigation, route }: any) => {
 
   return (
     <AppScreen withGradient>
+      <AuthBackButton navigation={navigation} />
       <AppText className="text-3xl font-bold text-slate-950">Student Login</AppText>
       <AppText className="mt-2 text-sm text-slate-500">
         Access your project workspace, tasks, chat, and teammate discovery.
@@ -58,6 +60,11 @@ export const StudentLoginScreen = ({ navigation, route }: any) => {
             Forgot password?
           </AppText>
         </Pressable>
+        <AuthSwitchLink
+          label="No account yet?"
+          actionLabel="Create one"
+          onPress={() => navigation.navigate('Register')}
+        />
       </View>
     </AppScreen>
   );

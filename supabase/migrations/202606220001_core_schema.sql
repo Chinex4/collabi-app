@@ -380,7 +380,7 @@ begin
     nullif(new.raw_user_meta_data->>'faculty_id', '')::uuid,
     nullif(new.raw_user_meta_data->>'department_id', '')::uuid,
     new.raw_user_meta_data->>'level',
-    new.email_confirmed_at is not null,
+    true,
     'active'
   );
 
@@ -404,7 +404,7 @@ set search_path = public
 as $$
 begin
   update public.users
-  set is_verified = new.email_confirmed_at is not null,
+  set is_verified = true,
       email = new.email,
       updated_at = now()
   where id = new.id;
@@ -744,4 +744,3 @@ begin
   return v_project_id;
 end;
 $$;
-

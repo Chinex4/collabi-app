@@ -8,6 +8,7 @@ import {
   Pressable,
   SafeAreaView,
   ScrollView,
+  StyleSheet,
   Text,
   TextInput,
   View,
@@ -59,7 +60,7 @@ export const AppButton = ({
   loading?: boolean;
   className?: string;
 }) => {
-  const styles =
+  const variantClasses =
     variant === 'primary'
       ? 'bg-[#7921BF]'
       : variant === 'secondary'
@@ -79,9 +80,10 @@ export const AppButton = ({
     <Pressable
       disabled={disabled || loading}
       onPress={onPress}
+      style={styles.button}
       className={cn(
-        'flex-row items-center justify-center rounded-2xl px-4 py-3',
-        styles,
+        'flex-row items-center justify-center rounded-2xl px-4 py-4',
+        variantClasses,
         disabled ? 'opacity-60' : '',
         className
       )}>
@@ -98,7 +100,9 @@ export const AppButton = ({
               color={variant === 'primary' || variant === 'danger' ? '#fff' : PRIMARY_COLOR}
             />
           ) : null}
-          <AppText className={cn('ml-2 text-center font-semibold', textColor)}>{label}</AppText>
+          <AppText className={cn(icon ? 'ml-2' : '', 'text-center font-semibold', textColor)}>
+            {label}
+          </AppText>
         </>
       )}
     </Pressable>
@@ -128,8 +132,9 @@ export const AppInput = ({
     multiline={multiline}
     keyboardType={keyboardType}
     placeholderTextColor="#8E7BAA"
+    style={[styles.input, multiline ? styles.textArea : null]}
     className={cn(
-      'rounded-2xl border border-violet-200 bg-white px-4 py-3 text-slate-900',
+      'rounded-2xl border border-violet-200 bg-white px-4 py-4 text-base text-slate-900',
       multiline ? 'min-h-[110px]' : ''
     )}
   />
@@ -169,24 +174,38 @@ export const AppScreen = ({
       <StatusBar style="dark" />
       <ScrollView
         className="flex-1 pt-12"
+        style={styles.flex}
         contentContainerStyle={{ padding: 20, paddingBottom: 40 }}
         showsVerticalScrollIndicator={false}>
         {children}
       </ScrollView>
     </>
   ) : (
-    <View className="flex-1 px-5 py-5 pt-20">{children}</View>
+    <View className="flex-1 px-5 py-5 pt-20" style={styles.staticScreenContent}>
+      {children}
+    </View>
   );
 
   if (withGradient) {
     return (
-      <LinearGradient colors={['#F7F2FC', '#FFFFFF']} className="flex-1">
-        <SafeAreaView className="flex-1">{content}</SafeAreaView>
+      <LinearGradient colors={['#F7F2FC', '#FFFFFF']} className="flex-1" style={styles.flex}>
+        <SafeAreaView className="flex-1" style={styles.flex}>
+          {content}
+        </SafeAreaView>
       </LinearGradient>
     );
   }
 
-  return <SafeAreaView className={cn('flex-1', backgroundClassName)}>{content}</SafeAreaView>;
+  return (
+    <SafeAreaView
+      className={cn('flex-1', backgroundClassName)}
+      style={[
+        styles.appScreen,
+        backgroundClassName.includes('transparent') ? styles.transparentScreen : null,
+      ]}>
+      {content}
+    </SafeAreaView>
+  );
 };
 
 export const SectionHeader = ({ title, action }: { title: string; action?: ReactNode }) => (
@@ -230,7 +249,9 @@ export const LoadingState = ({
   label?: string;
   fullscreen?: boolean;
 }) => (
-  <View className={cn('items-center justify-center py-14', fullscreen ? 'flex-1 px-5' : '')}>
+  <View
+    className={cn('items-center justify-center py-14', fullscreen ? 'flex-1 px-5' : '')}
+    style={[styles.loadingState, fullscreen ? styles.flex : null]}>
     <ActivityIndicator color={PRIMARY_COLOR} />
     <AppText className="mt-3 text-sm text-slate-500">{label}</AppText>
   </View>
@@ -363,3 +384,38 @@ export const ConfirmModal = ({
     </View>
   </Modal>
 );
+
+const styles = StyleSheet.create({
+  appScreen: {
+    backgroundColor: '#F6F4FB',
+    flex: 1,
+  },
+  button: {
+    minHeight: 56,
+  },
+  flex: {
+    flex: 1,
+  },
+  input: {
+    fontSize: 16,
+    minHeight: 56,
+  },
+  loadingState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 56,
+  },
+  staticScreenContent: {
+    flex: 1,
+    paddingBottom: 20,
+    paddingHorizontal: 20,
+    paddingTop: 80,
+  },
+  textArea: {
+    minHeight: 120,
+    textAlignVertical: 'top',
+  },
+  transparentScreen: {
+    backgroundColor: 'transparent',
+  },
+});

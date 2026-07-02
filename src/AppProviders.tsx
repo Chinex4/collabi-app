@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import React, { ReactNode, useEffect } from 'react';
 import { Provider } from 'react-redux';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 import { authService } from '@/api/services/authService';
 import { chatService } from '@/api/services/chatService';
@@ -30,6 +30,16 @@ const queryClient = new QueryClient({
   },
 });
 
+const BOOTSTRAP_TIMEOUT_MS = 8000;
+
+const withTimeout = async <T,>(promise: Promise<T>, label: string) =>
+  Promise.race<T>([
+    promise,
+    new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error(`${label} timed out`)), BOOTSTRAP_TIMEOUT_MS);
+    }),
+  ]);
+
 const Bootstrapper = ({ children }: { children: ReactNode }) => {
   const dispatch = useAppDispatch();
   const toast = useAppSelector((state) => state.ui.toast);
@@ -46,7 +56,7 @@ const Bootstrapper = ({ children }: { children: ReactNode }) => {
           return;
         }
 
-        const refreshed = await authService.refreshSession(session);
+        const refreshed = await withTimeout(authService.refreshSession(session), 'Session restore');
         dispatch(setSession(refreshed.session));
         dispatch(setCurrentUser(refreshed.user));
         await sessionStorage.setSession(refreshed.session);
@@ -85,23 +95,29 @@ const Bootstrapper = ({ children }: { children: ReactNode }) => {
   }, [dispatch, toast]);
 
   return (
-    <>
+    <View style={styles.providerRoot}>
       {children}
       {toast ? (
         <View className="absolute bottom-8 left-5 right-5 rounded-2xl bg-slate-950 px-4 py-3">
           <AppText className="text-center text-sm text-white">{toast.message}</AppText>
         </View>
       ) : null}
-    </>
+    </View>
   );
 };
 
 export const AppProviders = ({ children }: { children: ReactNode }) => (
   <Provider store={store}>
     <QueryClientProvider client={queryClient}>
-      <SafeAreaProvider>
+      <SafeAreaProvider style={styles.providerRoot}>
         <Bootstrapper>{children}</Bootstrapper>
       </SafeAreaProvider>
     </QueryClientProvider>
   </Provider>
 );
+
+const styles = StyleSheet.create({
+  providerRoot: {
+    flex: 1,
+  },
+});

@@ -10,6 +10,7 @@ import { useLookups } from '@/hooks/useQueries';
 import { useAppDispatch } from '@/hooks/useAppStore';
 import { showToast } from '@/store/uiSlice';
 import { registerSchema } from '@/utils/validation';
+import { AuthBackButton, AuthSwitchLink } from './AuthChrome';
 
 export const RegisterScreen = ({ navigation }: any) => {
   const dispatch = useAppDispatch();
@@ -31,7 +32,7 @@ export const RegisterScreen = ({ navigation }: any) => {
     mutationFn: authService.registerStudent,
     onSuccess: (result) => {
       dispatch(showToast({ type: 'success', message: result.message }));
-      navigation.navigate('VerifyEmailOtp', { email: result.email });
+      navigation.replace('StudentLogin', { email: result.email });
     },
     onError: (error: Error) => dispatch(showToast({ type: 'error', message: error.message })),
   });
@@ -50,11 +51,19 @@ export const RegisterScreen = ({ navigation }: any) => {
 
   return (
     <AppScreen withGradient>
+      <AuthBackButton navigation={navigation} />
       <AppText className="text-3xl font-bold text-slate-950">Create Student Account</AppText>
       <AppText className="mt-2 text-sm text-slate-500">
         Set up your profile and start matching with serious final year collaborators.
       </AppText>
       <View className="mt-8 rounded-[32px] bg-white p-5">
+        {mutation.error ? (
+          <View className="mb-4 rounded-2xl bg-rose-50 px-4 py-3">
+            <AppText className="text-sm font-semibold text-rose-800">
+              {mutation.error.message}
+            </AppText>
+          </View>
+        ) : null}
         <FormTextInput
           control={form.control}
           name="fullName"
@@ -97,6 +106,11 @@ export const RegisterScreen = ({ navigation }: any) => {
           label="Create Account"
           onPress={form.handleSubmit((values) => mutation.mutate(values))}
           loading={mutation.isPending}
+        />
+        <AuthSwitchLink
+          label="Already have an account?"
+          actionLabel="Login"
+          onPress={() => navigation.navigate('StudentLogin')}
         />
       </View>
     </AppScreen>

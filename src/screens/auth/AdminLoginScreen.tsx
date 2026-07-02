@@ -1,6 +1,6 @@
 import { useMutation } from '@tanstack/react-query';
 import React from 'react';
-import { Pressable, View } from 'react-native';
+import { View } from 'react-native';
 
 import { authService } from '@/api/services/authService';
 import { AppButton, AppScreen, AppText } from '@/components/common';
@@ -9,6 +9,7 @@ import { useSession } from '@/hooks/useSession';
 import { useAppDispatch } from '@/hooks/useAppStore';
 import { showToast } from '@/store/uiSlice';
 import { loginSchema } from '@/utils/validation';
+import { AuthBackButton } from './AuthChrome';
 
 export const AdminLoginScreen = ({ navigation }: any) => {
   const dispatch = useAppDispatch();
@@ -30,6 +31,7 @@ export const AdminLoginScreen = ({ navigation }: any) => {
 
   return (
     <AppScreen withGradient>
+      <AuthBackButton navigation={navigation} />
       <AppText className="text-3xl font-bold text-slate-950">Admin Login</AppText>
       <AppText className="mt-2 text-sm text-slate-500">
         Moderate reports, manage users, monitor platform activity, and push announcements.
@@ -53,11 +55,6 @@ export const AdminLoginScreen = ({ navigation }: any) => {
           onPress={form.handleSubmit((values) => mutation.mutate(values))}
           loading={mutation.isPending}
         />
-        <Pressable onPress={() => navigation.navigate('Welcome')} className="mt-4">
-          <AppText className="text-center text-sm font-medium text-violet-700">
-            Back to welcome
-          </AppText>
-        </Pressable>
       </View>
     </AppScreen>
   );
