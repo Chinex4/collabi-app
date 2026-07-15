@@ -9,7 +9,9 @@
     "experiments": {
       "tsconfigPaths": true
     },
-    "plugins": ["@react-native-community/datetimepicker"],
+    "plugins": [
+      "@react-native-community/datetimepicker"
+    ],
     "orientation": "portrait",
     "icon": "./assets/logo.png",
     "userInterfaceStyle": "automatic",
@@ -18,7 +20,9 @@
       "resizeMode": "contain",
       "backgroundColor": "#7921BF"
     },
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": true
     },
@@ -26,6 +30,12 @@
       "adaptiveIcon": {
         "foregroundImage": "./assets/logo.png",
         "backgroundColor": "#7921BF"
+      },
+      "package": "com.chinexx.collabi"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "e27c5f5c-a0b7-4773-964a-e3ba6dd59e0f"
       }
     }
   }
